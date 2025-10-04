@@ -99,18 +99,7 @@
 
 
 
-		<div class="controls" role="group" aria-label="Choose a Live2D model">
-			{#each demoModels as model, index (model.label)}
-				<button
-					type="button"
-					class:active={index === $activeModelIndex}
-					aria-pressed={index === $activeModelIndex}
-					on:click={() => selectModel(index)}
-				>
-					{model.label}
-				</button>
-			{/each}
-		</div>
+		
 	
 
 
@@ -134,8 +123,8 @@
     </aside>
 
     <!-- chat area -->
-    <section class="chat-area">
-		<div class="bg-black">
+    <section class="chat-area relative">
+		<div class="absolute z-50 h-1/3 right-0 w-1/3">
 				<Live2DPreview
 						modelPath={currentModel.modelPath}
 						cubismCorePath={currentModel.cubismCorePath}
@@ -146,6 +135,19 @@
 						positionX={currentModel.position?.x ?? 0.5}
 						positionY={currentModel.position?.y ?? 0.95}
 					/>
+
+					<div role="group" aria-label="Choose a Live2D model">
+						{#each demoModels as model, index (model.label)}
+							<button
+								type="button"
+								class:active={index === $activeModelIndex}
+								aria-pressed={index === $activeModelIndex}
+								on:click={() => selectModel(index)}
+							>
+								{model.label}
+							</button>
+						{/each}
+					</div>
 		</div>
 		
         <div class="messages">
