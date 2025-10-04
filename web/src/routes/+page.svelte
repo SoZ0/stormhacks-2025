@@ -155,16 +155,19 @@
             </div>
         {/each}
         </div>
-
-        <div class="input-bar">
-        <textarea
-            bind:value={input}
-            rows="1"
-            placeholder="Send a message..."
-            on:keydown={handleKey}
-        ></textarea>
-        <button class="send-btn" on:click={sendMessage}>➤</button>
+        
+        <div class="flex justify-center pb-10">
+            <div class="input-bar rounded-3xl w-5/6">
+                <textarea
+                    bind:value={input}
+                    rows="1"
+                    placeholder="Send a message..."
+                    on:keydown={handleKey}
+                ></textarea>
+                <button class="send-btn" on:click={sendMessage}>➤</button>
+            </div>
         </div>
+        
     </section>
 </div>
 
