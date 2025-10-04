@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { onMount } from "svelte";
+    import { fly } from "svelte/transition";
 	import { Live2DPreview } from '$lib';
 	import { writable } from 'svelte/store';
 
@@ -39,7 +41,59 @@
 	};
 
 	$: currentModel = demoModels[$activeModelIndex] ?? demoModels[0];
+    /**
+    * messaging script or wtv in here
+    * 
+     */
+
+
+    // message structure
+    interface Message {
+        sender: "user" | "bot";
+        text: string;
+    }
+
+    // state
+    let isCollapsed = false;
+    let messages: Message[] = [
+        { sender: "bot", text: "Hi there! How can I help you today?" }
+    ];
+    let input = "";
+
+    // toggles sidebar
+    function toggleSidebar(): void {
+        isCollapsed = !isCollapsed;
+    }
+
+    // sends a message
+    function sendMessage(): void {
+        if (!input.trim()) return;
+        messages = [...messages, { sender: "user", text: input }];
+        input = "";
+
+        // fake bot reply after 1s
+        setTimeout(() => {
+        messages = [
+            ...messages,
+            { sender: "bot", text: "I'm just a demo, but I heard you!" }
+        ];
+        }, 1000);
+    }
+
+    // submit on enter
+    function handleKey(e: KeyboardEvent): void {
+        if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+        }
+    }
+
+    // start collapsed on small screens
+    onMount(() => {
+        if (window.innerWidth <= 800) isCollapsed = true;
+    });
 </script>
+
 
 <section class="page">
 	<div class="copy">
@@ -73,89 +127,208 @@
 	/>
 </section>
 
+
+
 <style>
-	.page {
-		display: grid;
-		gap: 2rem;
-		padding: 4rem 1.5rem;
-		max-width: 960px;
-		margin: 0 auto;
-		align-items: center;
-	}
+    :global(body) {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #343541;
+        color: #ececf1;
+        overflow: hidden;
+    }
 
-	.copy {
-		display: grid;
-		gap: 1rem;
-		text-align: center;
-	}
+    .layout {
+        display: flex;
+        height: 100vh;
+    }
 
-	.controls {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem;
-		justify-content: center;
-		margin-top: 1rem;
-	}
+    /* sidebar */
+    .sidebar {
+        width: 260px;
+        background: #202123;
+        color: #ececf1;
+        padding: 20px;
+        box-sizing: border-box;
+        transition: transform 0.3s ease;
+        overflow-y: auto;
+    }
+    .sidebar.collapsed {
+        transform: translateX(-100%);
+    }
 
-	.controls button {
-		padding: 0.65rem 1.1rem;
-		border-radius: 9999px;
-		border: 1px solid rgba(0, 0, 0, 0.15);
-		background: rgba(255, 255, 255, 0.8);
-		box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
-		font-size: 0.95rem;
-		font-weight: 500;
-		transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
-		cursor: pointer;
-	}
+    .new-chat-btn {
+        background: #10a37f;
+        border: none;
+        color: white;
+        padding: 10px;
+        width: 100%;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        margin-bottom: 20px;
+    }
+    .new-chat-btn:hover {
+        background: #0d8c6c;
+    }
 
-	.controls button:hover {
-		transform: translateY(-1px);
-		box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
-	}
+    .chat-list h3 {
+        font-size: 0.9rem;
+        color: #8e8e8f;
+        margin-bottom: 10px;
+    }
+    .chat-list li {
+        background: #2a2b32;
+        padding: 8px 10px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        cursor: pointer;
+    }
+    .chat-list li:hover {
+        background: #3b3c42;
+    }
 
-	.controls button:focus-visible {
-		outline: 3px solid rgba(99, 102, 241, 0.4);
-		outline-offset: 2px;
-	}
+    /* toggle */
+    .toggle-btn {
+        position: fixed;
+        top: 15px;
+        left: 15px;
+        background: #444654;
+        color: white;
+        border: none;
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        z-index: 1001;
+        font-size: 18px;
+    }
+    .toggle-btn:hover {
+        background: #5c5e70;
+    }
 
-	.controls button.active {
-		background: linear-gradient(135deg, rgba(99, 102, 241, 0.9), rgba(59, 130, 246, 0.9));
-		color: white;
-		border-color: transparent;
-		box-shadow: 0 16px 30px rgba(59, 130, 246, 0.25);
-	}
+    /* chat main area */
+    .chat-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #343541;
+        position: relative;
+        transition: margin-left 0.3s ease;
+    }
 
-	.copy h1 {
-		font-size: clamp(2rem, 4vw, 3rem);
-		font-weight: 600;
-	}
+    .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
 
-	.copy p {
-		color: rgba(0, 0, 0, 0.7);
-		line-height: 1.6;
-	}
+    .message {
+        max-width: 70%;
+        padding: 12px 16px;
+        border-radius: 10px;
+        line-height: 1.4;
+        word-wrap: break-word;
+    }
 
-	code {
-		font-size: 0.95rem;
-		background: rgba(0, 0, 0, 0.05);
-		padding: 0.15rem 0.35rem;
-		border-radius: 0.5rem;
-	}
+    .bot {
+        background: #444654;
+        align-self: flex-start;
+    }
 
-	@media (min-width: 768px) {
-		.page {
-			grid-template-columns: 1fr 1.1fr;
-			align-items: stretch;
-		}
+    .user {
+        background: #10a37f;
+        align-self: flex-end;
+    }
 
-		.copy {
-			text-align: left;
-			align-content: center;
-		}
+    /* input bar */
+    .input-bar {
+        position: sticky;
+        bottom: 0;
+        background: #40414f;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
 
-		.controls {
-			justify-content: flex-start;
-		}
-	}
+    .input-bar textarea {
+        flex: 1;
+        resize: none;
+        border: none;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 1rem;
+        background: #40414f;
+        color: white;
+        outline: none;
+    }
+
+    .send-btn {
+        background: #10a37f;
+        border: none;
+        color: white;
+        padding: 10px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .send-btn:hover {
+        background: #0d8c6c;
+    }
+
+    @media (max-width: 800px) {
+        .sidebar {
+        position: fixed;
+        height: 100%;
+        top: 0;
+        left: 0;
+        z-index: 1000;
+        }
+        .chat-area {
+        margin-left: 0 !important;
+        }
+    }
 </style>
+
+<!-- markup -->
+<button class="toggle-btn" on:click={toggleSidebar}>☰</button>
+
+<div class="layout">
+    <!-- sidebar -->
+    <aside class="sidebar {isCollapsed ? 'collapsed' : ''}" transition:fly={{ x: -200, duration: 250 }}>
+        <div class="pt-12">
+            <button class="new-chat-btn" on:click={() => (messages = [])}>+ New Chat</button>
+        </div>
+        <div class="chat-list">
+        <h3>Recent Chats</h3>
+        <ul>
+            <li>General Inquiry</li>
+            <li>Support</li>
+            <li>Agent A</li>
+        </ul>
+        </div>
+    </aside>
+
+    <!-- chat area -->
+    <section class="chat-area">
+        <div class="messages">
+        {#each messages as msg (msg.text)}
+            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+            {msg.text}
+            </div>
+        {/each}
+        </div>
+
+        <div class="input-bar">
+        <textarea
+            bind:value={input}
+            rows="1"
+            placeholder="Send a message..."
+            on:keydown={handleKey}
+        ></textarea>
+        <button class="send-btn" on:click={sendMessage}>➤</button>
+        </div>
+    </section>
+</div>
