@@ -28,11 +28,18 @@
 			scaleMultiplier: 0.85,
 			anchor: { x: 0.5, y: 0.2 },
 			position: { x: 0.5, y: 0.3 }
+		},
+        {
+			label: 'HuoHuo',
+			modelPath: '/models/huohuo/huohuo.model3.json',
+			scaleMultiplier: 1,
+			anchor: { x: 0.5, y: 0.4 },
+			position: { x: 0.5, y: 0.4 }
 		}
 	];
 
-	const activeModelIndex = writable<number>(0);
-	let currentModel: ModelOption = demoModels[0];
+	const activeModelIndex = writable<number>(2);
+	let currentModel: ModelOption = demoModels[2];
 
 	const selectModel = (index: number) => {
 		const option = demoModels[index];
