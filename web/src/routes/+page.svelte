@@ -17,29 +17,52 @@
         targetHeightRatio?: number;
     }
 
+	const demoModels: ModelOption[] = [
+		{
+			label: 'Hiyori',
+			modelPath: '/models/hiyori/hiyori_free_t08.model3.json',
+			scaleMultiplier: 1,
+			anchor: { x: 0.5, y: 0.4 },
+			position: { x: 0.5, y: 0.4 }
+		},
+		{
+			label: 'Miku',
+			modelPath: '/models/miku/runtime/miku.model3.json',
+			scaleMultiplier: 0.85,
+			anchor: { x: 0.5, y: 0.2 },
+			position: { x: 0.5, y: 0.3 }
+		},
+        {
+			label: 'HuoHuo',
+			modelPath: '/models/huohuo/huohuo.model3.json',
+			scaleMultiplier: 1,
+			anchor: { x: 0.5, y: 0.4 },
+			position: { x: 0.5, y: 0.4 }
+		}
+	];
+
+	const activeModelIndex = writable<number>(2);
+	let currentModel: ModelOption = demoModels[2];
+
+	const selectModel = (index: number) => {
+		const option = demoModels[index];
+		if (!option) return;
+		activeModelIndex.set(index);
+	};
+
+	$: currentModel = demoModels[$activeModelIndex] ?? demoModels[0];
+    /**
+    * messaging script or wtv in here
+    * 
+     */
+
+
+    // message structure
     interface Message {
         sender: 'user' | 'bot';
         text: string;
     }
 
-    const demoModels: ModelOption[] = [
-        {
-            label: 'Hiyori',
-            modelPath: '/models/hiyori/hiyori_free_t08.model3.json',
-            scaleMultiplier: 1,
-            anchor: { x: 0.5, y: 0.4 },
-            position: { x: 0.5, y: 0.4 }
-        },
-        {
-            label: 'Miku',
-            modelPath: '/models/miku/runtime/miku.model3.json',
-            scaleMultiplier: 0.85,
-            anchor: { x: 0.5, y: 0.2 },
-            position: { x: 0.5, y: 0.3 }
-        }
-    ];
-
-    const activeModelIndex = writable<number>(0);
     let currentModel: ModelOption = demoModels[0];
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
@@ -297,12 +320,6 @@
         }
     }
 </script>
-
-
-
-
-
-
 		
 	
 
@@ -325,6 +342,7 @@
         </ul>
         </div>
     </aside>
+    
 
     <!-- chat area -->
     <section class="chat-area relative">
@@ -414,8 +432,20 @@
             <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
             {msg.text}
             </div>
-        {/each}
-        </div>
+            
+            <div class="flex justify-center pb-10">
+                <div class="input-bar rounded-3xl w-5/6">
+                    <textarea
+                        bind:value={input}
+                        rows="1"
+                        placeholder="Send a message..."
+                        on:keydown={handleKey}
+                    ></textarea>
+                    <button class="send-btn" on:click={sendMessage}>➤</button>
+                </div>
+            </div>
+            
+        </section>
 
         <div class="input-bar">
         <textarea
