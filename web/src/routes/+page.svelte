@@ -44,10 +44,30 @@
 			anchor: { x: 0.5, y: 0.4 },
 			position: { x: 0.5, y: 0.4 }
 		}
-    ];
+	];
+
+    let previewIndex = 2; // start on HuoHuo (same as active index)
+
+    function nextModel() {
+        previewIndex = (previewIndex + 1) % demoModels.length;
+    }
+
+    function prevModel() {
+        previewIndex = (previewIndex - 1 + demoModels.length) % demoModels.length;
+    }
+
+    function confirmModel() {
+            selectModel(previewIndex);
+     }
+        
+
+    // message structure
+    interface Message {
+        sender: "user" | "bot";
+        text: string;
+    }
 
     const activeModelIndex = writable<number>(0);
-    let currentModel: ModelOption = demoModels[0];
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
     let providersError: string | null = null;
@@ -339,8 +359,7 @@
     <div class="flex flex-col md:flex-row w-full h-full">
        
         <!-- chat area -->
-        <section class="chat-area relative w-full h-full ">
-            
+        <section class="chat-area relative w-full h-full">
             <div class="messages">
             {#each messages as msg (msg.text)}
                 <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
@@ -425,17 +444,13 @@
                             positionY={currentModel.position?.y ?? 0.95}
                         />
 
-                        <div role="group" aria-label="Choose a Live2D model">
-                            {#each demoModels as model, index (model.label)}
-                                <button
-                                    type="button"
-                                    class:active={index === $activeModelIndex}
-                                    aria-pressed={index === $activeModelIndex}
-                                    on:click={() => selectModel(index)}
-                                >
-                                    {model.label}
-                                </button>
-                            {/each}
+                        <!-- Model selector (bottom-centered under Live2D) -->
+                        <div class="model-selector">
+                            <button on:click={prevModel} class="arrow-btn">⟨</button>
+                            <button class="confirm-btn" on:click={confirmModel}>
+                                {demoModels[previewIndex].label}
+                            </button>
+                            <button on:click={nextModel} class="arrow-btn">⟩</button>
                         </div>
             </div>
         </div>
@@ -663,5 +678,41 @@
         .chat-area {
         margin-left: 0 !important;
         }
+    }
+
+    .model-selector {
+	    position: absolute;
+	    bottom: 5%;
+	    left: 50%;
+	    transform: translateX(-50%);
+	    display: flex;
+	    align-items: center;
+	    gap: 12px;
+	    background: rgba(34, 34, 34, 0.8);
+	    padding: 8px 16px;
+	    border-radius: 12px;
+	    backdrop-filter: blur(6px);
+    }
+
+    .arrow-btn {
+	    background: transparent;
+	    color: #fff;
+	    font-size: 1.5rem;
+	    border: none;
+	    cursor: pointer;
+    }
+
+    .confirm-btn {
+	    background: #10a37f;
+	    color: white;
+	    font-weight: 600;
+	    padding: 6px 12px;
+	    border: none;
+	    border-radius: 6px;
+	    cursor: pointer;
+    }
+
+    .confirm-btn:hover {
+    	background: #0d8c6c;
     }
 </style>
