@@ -314,13 +314,8 @@
 	.viewer {
 		position: relative;
 		width: 100%;
-		height: 500px;
-		max-height: 70vh;
-		background: radial-gradient(circle at top, rgba(255, 255, 255, 0.6), rgba(200, 200, 255, 0.2));
-		border-radius: 1.5rem;
+		height: 100%;
 		overflow: hidden;
-		border: 1px solid rgba(255, 255, 255, 0.35);
-		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
 	}
 
 	.viewer canvas {
