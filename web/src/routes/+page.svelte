@@ -126,7 +126,7 @@
 
     <div class="flex flex-col md:flex-row w-full h-full">
         <!-- chat area -->
-        <section class="chat-area relative w-full h-full ">
+        <section class="chat-area relative w-full h-full">
             <div class="messages">
             {#each messages as msg (msg.text)}
                 <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
