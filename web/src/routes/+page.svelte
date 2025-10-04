@@ -17,21 +17,26 @@
         targetHeightRatio?: number;
     }
 
-	const demoModels: ModelOption[] = [
-		{
-			label: 'Hiyori',
-			modelPath: '/models/hiyori/hiyori_free_t08.model3.json',
-			scaleMultiplier: 1,
-			anchor: { x: 0.5, y: 0.4 },
-			position: { x: 0.5, y: 0.4 }
-		},
-		{
-			label: 'Miku',
-			modelPath: '/models/miku/runtime/miku.model3.json',
-			scaleMultiplier: 0.85,
-			anchor: { x: 0.5, y: 0.2 },
-			position: { x: 0.5, y: 0.3 }
-		},
+    interface Message {
+        sender: 'user' | 'bot';
+        text: string;
+    }
+
+    const demoModels: ModelOption[] = [
+        {
+            label: 'Hiyori',
+            modelPath: '/models/hiyori/hiyori_free_t08.model3.json',
+            scaleMultiplier: 1,
+            anchor: { x: 0.5, y: 0.4 },
+            position: { x: 0.5, y: 0.4 }
+        },
+        {
+            label: 'Miku',
+            modelPath: '/models/miku/runtime/miku.model3.json',
+            scaleMultiplier: 0.85,
+            anchor: { x: 0.5, y: 0.2 },
+            position: { x: 0.5, y: 0.3 }
+        },
         {
 			label: 'HuoHuo',
 			modelPath: '/models/huohuo/huohuo.model3.json',
@@ -39,30 +44,9 @@
 			anchor: { x: 0.5, y: 0.4 },
 			position: { x: 0.5, y: 0.4 }
 		}
-	];
+    ];
 
-	const activeModelIndex = writable<number>(2);
-	let currentModel: ModelOption = demoModels[2];
-
-	const selectModel = (index: number) => {
-		const option = demoModels[index];
-		if (!option) return;
-		activeModelIndex.set(index);
-	};
-
-	$: currentModel = demoModels[$activeModelIndex] ?? demoModels[0];
-    /**
-    * messaging script or wtv in here
-    * 
-     */
-
-
-    // message structure
-    interface Message {
-        sender: 'user' | 'bot';
-        text: string;
-    }
-
+    const activeModelIndex = writable<number>(0);
     let currentModel: ModelOption = demoModels[0];
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
@@ -341,39 +325,33 @@
             <li>Agent A</li>
         </ul>
         </div>
+         <div class="config-meta">
+            <a class="settings-link" href={resolve('/settings')}>Open LLM settings</a>
+            {#if isPersistingSettings}
+            <span class="config-hint saving">Saving…</span>
+            {:else if settingsPersistError}
+            <span class="config-error">{settingsPersistError}</span>
+            {/if}
+        </div>
     </aside>
     
 
-    <!-- chat area -->
-    <section class="chat-area relative">
-        <div class="absolute z-50 h-1/3 right-0 w-1/3">
-            <Live2DPreview
-                modelPath={currentModel.modelPath}
-                cubismCorePath={currentModel.cubismCorePath}
-                scaleMultiplier={currentModel.scaleMultiplier ?? 1}
-                targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
-                anchorX={currentModel.anchor?.x ?? 0.5}
-                anchorY={currentModel.anchor?.y ?? 0.5}
-                positionX={currentModel.position?.x ?? 0.5}
-                positionY={currentModel.position?.y ?? 0.95}
-            />
-
-            <div role="group" aria-label="Choose a Live2D model">
-                {#each demoModels as model, index (model.label)}
-                    <button
-                        type="button"
-                        class:active={index === $activeModelIndex}
-                        aria-pressed={index === $activeModelIndex}
-                        on:click={() => selectModel(index)}
-                    >
-                        {model.label}
-                    </button>
-                {/each}
+    <div class="flex flex-col md:flex-row w-full h-full">
+       
+        <!-- chat area -->
+        <section class="chat-area relative w-full h-full ">
+            
+            <div class="messages">
+            {#each messages as msg (msg.text)}
+                <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+                {msg.text}
+                </div>
+            {/each}
             </div>
-        </div>
-
-        <div class="chat-config">
-        <div class="config-group">
+            
+            <div class="flex justify-center pb-10">
+            <div class="flex flex-row">
+            <div class="config-group">
             <label>
             <span>Provider</span>
             <select
@@ -417,23 +395,8 @@
             <p class="config-hint">No models available for this provider.</p>
             {/if}
         </div>
-        <div class="config-meta">
-            <a class="settings-link" href={resolve('/settings')}>Open LLM settings</a>
-            {#if isPersistingSettings}
-            <span class="config-hint saving">Saving…</span>
-            {:else if settingsPersistError}
-            <span class="config-error">{settingsPersistError}</span>
-            {/if}
+       
         </div>
-        </div>
-
-        <div class="messages">
-        {#each messages as msg, index (index)}
-            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
-            {msg.text}
-            </div>
-            
-            <div class="flex justify-center pb-10">
                 <div class="input-bar rounded-3xl w-5/6">
                     <textarea
                         bind:value={input}
@@ -443,36 +406,40 @@
                     ></textarea>
                     <button class="send-btn" on:click={sendMessage}>➤</button>
                 </div>
+                
             </div>
             
         </section>
 
-        <div class="input-bar">
-        <textarea
-            bind:value={input}
-            rows="1"
-            placeholder="Send a message..."
-            on:keydown={handleKey}
-            disabled={isSending}
-        ></textarea>
-        <button
-            class="send-btn"
-            on:click={sendMessage}
-            disabled={isSending || isModelsLoading || !selectedModel}
-            aria-busy={isSending}
-        >
-            {#if isSending}
-            ...
-            {:else}
-            ➤
-            {/if}
-        </button>
-        </div>
 
-        {#if error}
-        <p class="error-banner" role="alert">{error}</p>
-        {/if}
-    </section>
+        <div class="flex w-1/3 h-full">
+            <div class="absolute z-50 h-full right-0 w-1/3">
+                    <Live2DPreview
+                            modelPath={currentModel.modelPath}
+                            cubismCorePath={currentModel.cubismCorePath}
+                            scaleMultiplier={currentModel.scaleMultiplier ?? 1}
+                            targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
+                            anchorX={currentModel.anchor?.x ?? 0.5}
+                            anchorY={currentModel.anchor?.y ?? 0.5}
+                            positionX={currentModel.position?.x ?? 0.5}
+                            positionY={currentModel.position?.y ?? 0.95}
+                        />
+
+                        <div role="group" aria-label="Choose a Live2D model">
+                            {#each demoModels as model, index (model.label)}
+                                <button
+                                    type="button"
+                                    class:active={index === $activeModelIndex}
+                                    aria-pressed={index === $activeModelIndex}
+                                    on:click={() => selectModel(index)}
+                                >
+                                    {model.label}
+                                </button>
+                            {/each}
+                        </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 
@@ -563,35 +530,12 @@
         transition: margin-left 0.3s ease;
     }
 
-    .chat-config {
-        display: flex;
-        gap: 16px;
-        padding: 16px 20px 0;
-        flex-wrap: wrap;
-    }
 
     .config-group {
         display: flex;
         flex-direction: column;
         gap: 6px;
         min-width: 180px;
-    }
-
-    .chat-config label {
-        display: flex;
-        flex-direction: column;
-        font-size: 0.8rem;
-        gap: 6px;
-        color: #8e8e8f;
-    }
-
-    .chat-config select {
-        background: #202123;
-        color: #ececf1;
-        border: 1px solid #3f414c;
-        border-radius: 6px;
-        padding: 8px;
-        font-size: 0.9rem;
     }
 
     .config-hint,
