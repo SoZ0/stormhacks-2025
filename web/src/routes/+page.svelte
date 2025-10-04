@@ -124,7 +124,31 @@
 
     <!-- chat area -->
     <section class="chat-area relative">
-		<div class="absolute z-50 h-1/3 right-0 w-1/3">
+        <div class="messages">
+        {#each messages as msg (msg.text)}
+            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+            {msg.text}
+            </div>
+        {/each}
+        </div>
+        
+        <div class="flex justify-center pb-10">
+            <div class="input-bar rounded-3xl w-5/6">
+                <textarea
+                    bind:value={input}
+                    rows="1"
+                    placeholder="Send a message..."
+                    on:keydown={handleKey}
+                ></textarea>
+                <button class="send-btn" on:click={sendMessage}>➤</button>
+            </div>
+        </div>
+        
+    </section>
+
+
+    <div class="flex w-1/3 h-full">
+        <div class="absolute z-50 h-full right-0 w-1/3">
 				<Live2DPreview
 						modelPath={currentModel.modelPath}
 						cubismCorePath={currentModel.cubismCorePath}
@@ -149,28 +173,7 @@
 						{/each}
 					</div>
 		</div>
-		
-        <div class="messages">
-        {#each messages as msg (msg.text)}
-            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
-            {msg.text}
-            </div>
-        {/each}
-        </div>
-        
-        <div class="flex justify-center pb-10">
-            <div class="input-bar rounded-3xl w-5/6">
-                <textarea
-                    bind:value={input}
-                    rows="1"
-                    placeholder="Send a message..."
-                    on:keydown={handleKey}
-                ></textarea>
-                <button class="send-btn" on:click={sendMessage}>➤</button>
-            </div>
-        </div>
-        
-    </section>
+    </div>
 </div>
 
 
