@@ -95,13 +95,10 @@
 </script>
 
 
-<section class="page">
-	<div class="copy">
-		<h1>Live2D Cubism Preview</h1>
-		<p>
-			Experiment with multiple Cubism models bundled in <code>static/models</code>. Use the buttons to
-			switch between configurations and confirm positioning or scaling tweaks.
-		</p>
+
+
+
+
 		<div class="controls" role="group" aria-label="Choose a Live2D model">
 			{#each demoModels as model, index (model.label)}
 				<button
@@ -114,19 +111,62 @@
 				</button>
 			{/each}
 		</div>
-	</div>
-	<Live2DPreview
-		modelPath={currentModel.modelPath}
-		cubismCorePath={currentModel.cubismCorePath}
-		scaleMultiplier={currentModel.scaleMultiplier ?? 1}
-		targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
-		anchorX={currentModel.anchor?.x ?? 0.5}
-		anchorY={currentModel.anchor?.y ?? 0.5}
-		positionX={currentModel.position?.x ?? 0.5}
-		positionY={currentModel.position?.y ?? 0.95}
-	/>
-</section>
+	
 
+
+<!-- markup -->
+<button class="toggle-btn" on:click={toggleSidebar}>☰</button>
+
+<div class="layout">
+    <!-- sidebar -->
+    <aside class="sidebar {isCollapsed ? 'collapsed' : ''}" transition:fly={{ x: -200, duration: 250 }}>
+        <div class="pt-12">
+            <button class="new-chat-btn" on:click={() => (messages = [])}>+ New Chat</button>
+        </div>
+        <div class="chat-list">
+        <h3>Recent Chats</h3>
+        <ul>
+            <li>General Inquiry</li>
+            <li>Support</li>
+            <li>Agent A</li>
+        </ul>
+        </div>
+    </aside>
+
+    <!-- chat area -->
+    <section class="chat-area">
+		<div class="bg-black">
+				<Live2DPreview
+						modelPath={currentModel.modelPath}
+						cubismCorePath={currentModel.cubismCorePath}
+						scaleMultiplier={currentModel.scaleMultiplier ?? 1}
+						targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
+						anchorX={currentModel.anchor?.x ?? 0.5}
+						anchorY={currentModel.anchor?.y ?? 0.5}
+						positionX={currentModel.position?.x ?? 0.5}
+						positionY={currentModel.position?.y ?? 0.95}
+					/>
+		</div>
+		
+        <div class="messages">
+        {#each messages as msg (msg.text)}
+            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+            {msg.text}
+            </div>
+        {/each}
+        </div>
+
+        <div class="input-bar">
+        <textarea
+            bind:value={input}
+            rows="1"
+            placeholder="Send a message..."
+            on:keydown={handleKey}
+        ></textarea>
+        <button class="send-btn" on:click={sendMessage}>➤</button>
+        </div>
+    </section>
+</div>
 
 
 <style>
@@ -291,44 +331,3 @@
         }
     }
 </style>
-
-<!-- markup -->
-<button class="toggle-btn" on:click={toggleSidebar}>☰</button>
-
-<div class="layout">
-    <!-- sidebar -->
-    <aside class="sidebar {isCollapsed ? 'collapsed' : ''}" transition:fly={{ x: -200, duration: 250 }}>
-        <div class="pt-12">
-            <button class="new-chat-btn" on:click={() => (messages = [])}>+ New Chat</button>
-        </div>
-        <div class="chat-list">
-        <h3>Recent Chats</h3>
-        <ul>
-            <li>General Inquiry</li>
-            <li>Support</li>
-            <li>Agent A</li>
-        </ul>
-        </div>
-    </aside>
-
-    <!-- chat area -->
-    <section class="chat-area">
-        <div class="messages">
-        {#each messages as msg (msg.text)}
-            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
-            {msg.text}
-            </div>
-        {/each}
-        </div>
-
-        <div class="input-bar">
-        <textarea
-            bind:value={input}
-            rows="1"
-            placeholder="Send a message..."
-            on:keydown={handleKey}
-        ></textarea>
-        <button class="send-btn" on:click={sendMessage}>➤</button>
-        </div>
-    </section>
-</div>
