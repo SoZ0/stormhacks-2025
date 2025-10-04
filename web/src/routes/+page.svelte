@@ -93,12 +93,6 @@
         if (window.innerWidth <= 800) isCollapsed = true;
     });
 </script>
-
-
-
-
-
-
 		
 	
 
@@ -121,58 +115,61 @@
         </ul>
         </div>
     </aside>
+    
 
-    <!-- chat area -->
-    <section class="chat-area relative">
-        <div class="messages">
-        {#each messages as msg (msg.text)}
-            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
-            {msg.text}
+    <div class="flex flex-col md:flex-row w-full h-full">
+        <!-- chat area -->
+        <section class="chat-area relative w-full h-full ">
+            <div class="messages">
+            {#each messages as msg (msg.text)}
+                <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+                {msg.text}
+                </div>
+            {/each}
             </div>
-        {/each}
-        </div>
-        
-        <div class="flex justify-center pb-10">
-            <div class="input-bar rounded-3xl w-5/6">
-                <textarea
-                    bind:value={input}
-                    rows="1"
-                    placeholder="Send a message..."
-                    on:keydown={handleKey}
-                ></textarea>
-                <button class="send-btn" on:click={sendMessage}>➤</button>
+            
+            <div class="flex justify-center pb-10">
+                <div class="input-bar rounded-3xl w-5/6">
+                    <textarea
+                        bind:value={input}
+                        rows="1"
+                        placeholder="Send a message..."
+                        on:keydown={handleKey}
+                    ></textarea>
+                    <button class="send-btn" on:click={sendMessage}>➤</button>
+                </div>
+            </div>
+            
+        </section>
+
+
+        <div class="flex w-1/3 h-full">
+            <div class="absolute z-50 h-full right-0 w-1/3">
+                    <Live2DPreview
+                            modelPath={currentModel.modelPath}
+                            cubismCorePath={currentModel.cubismCorePath}
+                            scaleMultiplier={currentModel.scaleMultiplier ?? 1}
+                            targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
+                            anchorX={currentModel.anchor?.x ?? 0.5}
+                            anchorY={currentModel.anchor?.y ?? 0.5}
+                            positionX={currentModel.position?.x ?? 0.5}
+                            positionY={currentModel.position?.y ?? 0.95}
+                        />
+
+                        <div role="group" aria-label="Choose a Live2D model">
+                            {#each demoModels as model, index (model.label)}
+                                <button
+                                    type="button"
+                                    class:active={index === $activeModelIndex}
+                                    aria-pressed={index === $activeModelIndex}
+                                    on:click={() => selectModel(index)}
+                                >
+                                    {model.label}
+                                </button>
+                            {/each}
+                        </div>
             </div>
         </div>
-        
-    </section>
-
-
-    <div class="flex w-1/3 h-full">
-        <div class="absolute z-50 h-full right-0 w-1/3">
-				<Live2DPreview
-						modelPath={currentModel.modelPath}
-						cubismCorePath={currentModel.cubismCorePath}
-						scaleMultiplier={currentModel.scaleMultiplier ?? 1}
-						targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
-						anchorX={currentModel.anchor?.x ?? 0.5}
-						anchorY={currentModel.anchor?.y ?? 0.5}
-						positionX={currentModel.position?.x ?? 0.5}
-						positionY={currentModel.position?.y ?? 0.95}
-					/>
-
-					<div role="group" aria-label="Choose a Live2D model">
-						{#each demoModels as model, index (model.label)}
-							<button
-								type="button"
-								class:active={index === $activeModelIndex}
-								aria-pressed={index === $activeModelIndex}
-								on:click={() => selectModel(index)}
-							>
-								{model.label}
-							</button>
-						{/each}
-					</div>
-		</div>
     </div>
 </div>
 
