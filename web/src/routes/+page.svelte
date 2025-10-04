@@ -1,203 +1,260 @@
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatbot with Collapsible Sidebar</title>
-    <style>
-        body {
-            display: flex;
-            margin: 0;
-            font-family: sans-serif;
-            overflow-x: hidden; /* prevent horizontal scroll */
-        }
+<script lang="ts">
+    import { onMount } from "svelte";
+    import { fly } from "svelte/transition";
 
-        /* sidebar styles */
+    /**
+    * messaging script or wtv in here
+    * 
+     */
+
+
+    // message structure
+    interface Message {
+        sender: "user" | "bot";
+        text: string;
+    }
+
+    // state
+    let isCollapsed = false;
+    let messages: Message[] = [
+        { sender: "bot", text: "Hi there! How can I help you today?" }
+    ];
+    let input = "";
+
+    // toggles sidebar
+    function toggleSidebar(): void {
+        isCollapsed = !isCollapsed;
+    }
+
+    // sends a message
+    function sendMessage(): void {
+        if (!input.trim()) return;
+        messages = [...messages, { sender: "user", text: input }];
+        input = "";
+
+        // fake bot reply after 1s
+        setTimeout(() => {
+        messages = [
+            ...messages,
+            { sender: "bot", text: "I'm just a demo, but I heard you!" }
+        ];
+        }, 1000);
+    }
+
+    // submit on enter
+    function handleKey(e: KeyboardEvent): void {
+        if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+        }
+    }
+
+    // start collapsed on small screens
+    onMount(() => {
+        if (window.innerWidth <= 800) isCollapsed = true;
+    });
+</script>
+
+<style>
+    :global(body) {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #343541;
+        color: #ececf1;
+        overflow: hidden;
+    }
+
+    .layout {
+        display: flex;
+        height: 100vh;
+    }
+
+    /* sidebar */
+    .sidebar {
+        width: 260px;
+        background: #202123;
+        color: #ececf1;
+        padding: 20px;
+        box-sizing: border-box;
+        transition: transform 0.3s ease;
+        overflow-y: auto;
+    }
+    .sidebar.collapsed {
+        transform: translateX(-100%);
+    }
+
+    .new-chat-btn {
+        background: #10a37f;
+        border: none;
+        color: white;
+        padding: 10px;
+        width: 100%;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        margin-bottom: 20px;
+    }
+    .new-chat-btn:hover {
+        background: #0d8c6c;
+    }
+
+    .chat-list h3 {
+        font-size: 0.9rem;
+        color: #8e8e8f;
+        margin-bottom: 10px;
+    }
+    .chat-list li {
+        background: #2a2b32;
+        padding: 8px 10px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        cursor: pointer;
+    }
+    .chat-list li:hover {
+        background: #3b3c42;
+    }
+
+    /* toggle */
+    .toggle-btn {
+        position: fixed;
+        top: 15px;
+        left: 15px;
+        background: #444654;
+        color: white;
+        border: none;
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        z-index: 1001;
+        font-size: 18px;
+    }
+    .toggle-btn:hover {
+        background: #5c5e70;
+    }
+
+    /* chat main area */
+    .chat-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #343541;
+        position: relative;
+        transition: margin-left 0.3s ease;
+    }
+
+    .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .message {
+        max-width: 70%;
+        padding: 12px 16px;
+        border-radius: 10px;
+        line-height: 1.4;
+        word-wrap: break-word;
+    }
+
+    .bot {
+        background: #444654;
+        align-self: flex-start;
+    }
+
+    .user {
+        background: #10a37f;
+        align-self: flex-end;
+    }
+
+    /* input bar */
+    .input-bar {
+        position: sticky;
+        bottom: 0;
+        background: #40414f;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .input-bar textarea {
+        flex: 1;
+        resize: none;
+        border: none;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 1rem;
+        background: #40414f;
+        color: white;
+        outline: none;
+    }
+
+    .send-btn {
+        background: #10a37f;
+        border: none;
+        color: white;
+        padding: 10px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .send-btn:hover {
+        background: #0d8c6c;
+    }
+
+    @media (max-width: 800px) {
         .sidebar {
-            width: 250px;
-            background-color: #f0f0f0;
-            padding: 20px;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-            height: 100vh;
-            overflow-y: auto;
-            position: fixed;
-            left: 0;
-            top: 0;
-            transition: transform 0.3s ease;
+        position: fixed;
+        height: 100%;
+        top: 0;
+        left: 0;
+        z-index: 1000;
         }
-
-        /* collapsed state */
-        .sidebar.collapsed {
-            transform: translateX(-100%);
+        .chat-area {
+        margin-left: 0 !important;
         }
+    }
+</style>
 
-        /* main content */
-        .main-content {
-            flex-grow: 1;
-            padding: 20px;
-            margin-left: 250px;
-            transition: margin-left 0.3s ease;
-            width: 100%;
-        }
+<!-- markup -->
+<button class="toggle-btn" on:click={toggleSidebar}>☰</button>
 
-        /* when sidebar collapsed */
-        .main-content.expanded {
-            margin-left: 0;
-        }
-
-        /* sidebar toggle button */
-        .toggle-btn {
-            position: fixed;
-            top: 15px;
-            left: 15px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 12px;
-            border-radius: 5px;
-            cursor: pointer;
-            z-index: 1000;
-        }
-
-        .toggle-btn:hover {
-            background-color: #0056b3;
-        }
-
-        /* chat list styling */
-        .chat-list ul {
-            list-style: none;
-            padding: 0;
-        }
-
-        .chat-list li {
-            margin-bottom: 10px;
-            padding: 8px;
-            background-color: #e0e0e0;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-
-        .chat-list li:hover {
-            background-color: #d0d0d0;
-        }
-
-        .new-chat-button {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            background-color: #007bff;
-            color: white;
-            text-align: center;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-bottom: 20px;
-        }
-
-        .new-chat-button:hover {
-            background-color: #0056b3;
-        }
-    </style>
-</head>
-<body>
-    <button class="toggle-btn" id="toggleSidebar">☰</button>
-
-    <div class="sidebar" id="sidebar">
-        <button class="new-chat-button">New Chat</button>
-        <div class="chat-list">
-            <h3>Recent Chats</h3>
-            <ul>
-                <li>Chat with Agent A</li>
-                <li>Chat with Support</li>
-                <li>General Inquiry</li>
-            </ul>
+<div class="layout">
+    <!-- sidebar -->
+    <aside class="sidebar {isCollapsed ? 'collapsed' : ''}" transition:fly={{ x: -200, duration: 250 }}>
+        <div class="pt-12">
+            <button class="new-chat-btn" on:click={() => (messages = [])}>+ New Chat</button>
         </div>
-    </div>
-
-    <div class="main-content" id="mainContent">
-        <h1>Welcome to the Chatbot</h1>
-        <p>Select a chat from the sidebar or start a new one.</p>
-    </div>
-
-    <script>
-        const toggleBtn = document.getElementById('toggleSidebar');
-        const sidebar = document.getElementById('sidebar');
-        const mainContent = document.getElementById('mainContent');
-
-        toggleBtn.addEventListener('click', () => {
-            sidebar.classList.toggle('collapsed');
-            mainContent.classList.toggle('expanded');
-        });
-    </script>
-</body>
-</html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chatbot with Sidebar</title>
-    <style>
-        body {
-            display: flex; /* Use flexbox for layout */
-            margin: 0;
-            font-family: sans-serif;
-        }
-        .sidebar {
-            width: 250px; /* Adjust width as needed */
-            background-color: #f0f0f0;
-            padding: 20px;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-            height: 100vh; /* Full viewport height */
-            overflow-y: auto; /* Enable scrolling if content exceeds height */
-        }
-        .main-content {
-            flex-grow: 1; /* Takes up remaining space */
-            padding: 20px;
-        }
-        .chat-list ul {
-            list-style: none;
-            padding: 0;
-        }
-        .chat-list li {
-            margin-bottom: 10px;
-            padding: 8px;
-            background-color: #e0e0e0;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .chat-list li:hover {
-            background-color: #d0d0d0;
-        }
-        .new-chat-button {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            background-color: #007bff;
-            color: white;
-            text-align: center;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-bottom: 20px;
-        }
-        .new-chat-button:hover {
-            background-color: #0056b3;
-        }
-    </style>
-</head>
-<body>
-    <div class="sidebar">
-        <button class="new-chat-button">New Chat</button>
         <div class="chat-list">
-            <h3>Recent Chats</h3>
-            <ul>
-                <li>Chat with Agent A</li>
-                <li>Chat with Support</li>
-                <li>General Inquiry</li>
-            </ul>
+        <h3>Recent Chats</h3>
+        <ul>
+            <li>General Inquiry</li>
+            <li>Support</li>
+            <li>Agent A</li>
+        </ul>
         </div>
-    </div>
-    <div class="main-content">
-        <h1>Welcome to the Chatbot</h1>
-        <p>Select a chat from the sidebar or start a new one.</p>
-        <!-- Chat window content would go here -->
-    </div>
-</body>
+    </aside>
+
+    <!-- chat area -->
+    <section class="chat-area">
+        <div class="messages">
+        {#each messages as msg (msg.text)}
+            <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
+            {msg.text}
+            </div>
+        {/each}
+        </div>
+
+        <div class="input-bar">
+        <textarea
+            bind:value={input}
+            rows="1"
+            placeholder="Send a message..."
+            on:keydown={handleKey}
+        ></textarea>
+        <button class="send-btn" on:click={sendMessage}>➤</button>
+        </div>
+    </section>
+</div>
