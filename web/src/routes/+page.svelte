@@ -1,26 +1,25 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import { fly } from "svelte/transition";
-    import { Live2DPreview } from '$lib';
     import { writable } from 'svelte/store';
     import { resolve } from '$app/paths';
+    import {
+        fetchProviders,
+        fetchProviderSettings,
+        fetchModels,
+        saveProviderSettings,
+        sendChatMessage,
+        type ChatMessagePayload
+    } from '$lib/llm/client';
     import { defaultProvider } from '$lib/llm/providers';
     import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
+    import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+    import ChatMessages from '$lib/components/chat/ChatMessages.svelte';
+    import ChatProviderControls from '$lib/components/chat/ChatProviderControls.svelte';
+    import ChatInput from '$lib/components/chat/ChatInput.svelte';
+    import ModelPreviewPanel from '$lib/components/chat/ModelPreviewPanel.svelte';
+    import type { ModelOption } from '$lib/chat/types';
 
-    interface ModelOption {
-        label: string;
-        modelPath: string;
-        cubismCorePath?: string;
-        anchor?: { x?: number; y?: number };
-        position?: { x?: number; y?: number };
-        scaleMultiplier?: number;
-        targetHeightRatio?: number;
-    }
-
-    interface Message {
-        sender: 'user' | 'bot';
-        text: string;
-    }
+    type Message = ChatMessagePayload;
 
     const demoModels: ModelOption[] = [
         {
@@ -60,12 +59,6 @@
             selectModel(previewIndex);
      }
         
-
-    // message structure
-    interface Message {
-        sender: "user" | "bot";
-        text: string;
-    }
 
     const activeModelIndex = writable<number>(0);
     let providers: ProviderConfig[] = [defaultProvider];
@@ -107,16 +100,8 @@
         providersError = null;
 
         try {
-            const response = await fetch('/api/providers');
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load providers (${response.status})`);
-            }
-
-            const list = Array.isArray(data.providers) ? (data.providers as ProviderConfig[]) : [];
-
-            providers = list.length ? list : [defaultProvider];
+            const list = await fetchProviders();
+            providers = list;
 
             if (!providers.some((provider) => provider.id === selectedProviderId)) {
                 selectedProviderId = providers[0]?.id ?? defaultProvider.id;
@@ -134,19 +119,9 @@
         settingsLoadError = null;
 
         try {
-            const response = await fetch('/api/settings');
-            const data = await response.json().catch(() => null);
+            const serverSettings = await fetchProviderSettings();
 
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load settings (${response.status})`);
-            }
-
-            const serverSettings = data.settings;
-            if (
-                serverSettings &&
-                typeof serverSettings === 'object' &&
-                typeof serverSettings.provider === 'string'
-            ) {
+            if (serverSettings && typeof serverSettings.provider === 'string') {
                 const providerExists = providers.some((provider) => provider.id === serverSettings.provider);
                 selectedProviderId = providerExists
                     ? serverSettings.provider
@@ -187,20 +162,7 @@
         modelsError = { ...modelsError, [provider]: undefined };
 
         try {
-            const response = await fetch(`/api/models/${provider}`);
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load models (${response.status})`);
-            }
-
-            const models = Array.isArray(data.models)
-                ? data.models.filter(
-                        (name: unknown): name is string =>
-                            typeof name === 'string' && name.trim().length > 0
-                    )
-                : [];
-
+            const models = await fetchModels(provider);
             modelsByProvider = { ...modelsByProvider, [provider]: models };
         } catch (err) {
             modelsError = {
@@ -220,17 +182,7 @@
         settingsPersistError = null;
 
         try {
-            const response = await fetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider, model })
-            });
-
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to save settings (${response.status})`);
-            }
+            await saveProviderSettings(provider, model);
         } catch (err) {
             settingsPersistError =
                 err instanceof Error ? err.message : 'Unable to save provider settings';
@@ -255,7 +207,7 @@
         }
 
         const nextMessages: Message[] = [...messages, { sender: 'user', text: trimmed }];
-        const payload = nextMessages.map(({ sender, text }) => ({ sender, text }));
+        const payload: ChatMessagePayload[] = nextMessages.map(({ sender, text }) => ({ sender, text }));
 
         messages = nextMessages;
         input = "";
@@ -263,39 +215,13 @@
         isSending = true;
 
         try {
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    provider: selectedProviderId,
-                    model: selectedModel,
-                    messages: payload
-                })
-            });
-
-            const data = await response.json().catch(() => null);
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Request failed (${response.status})`);
-            }
-
-            const reply: string | undefined = data?.reply;
-            if (!reply) {
-                throw new Error('Response did not include a reply message');
-            }
-
+            const reply = await sendChatMessage(selectedProviderId, selectedModel, payload);
             messages = [...nextMessages, { sender: 'bot', text: reply }];
         } catch (err) {
             error = err instanceof Error ? err.message : 'An unexpected error occurred';
             messages = nextMessages;
         } finally {
             isSending = false;
-        }
-    };
-
-    const handleKey = (event: KeyboardEvent) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            sendMessage();
         }
     };
 
@@ -347,130 +273,64 @@
 <button class="toggle-btn" on:click={toggleSidebar}>☰</button>
 
 <div class="layout">
-    <!-- sidebar -->
-    <aside class="sidebar {isCollapsed ? 'collapsed' : ''}" transition:fly={{ x: -200, duration: 250 }}>
-        <div class="pt-12">
-            <button class="new-chat-btn" on:click={startNewChat}>+ New Chat</button>
-        </div>
-        <div class="chat-list">
-        <h3>Recent Chats</h3>
-        <ul>
-            <li>General Inquiry</li>
-            <li>Support</li>
-            <li>Agent A</li>
-        </ul>
-        </div>
-         <div class="config-meta">
-            <a class="settings-link" href={resolve('/settings')}>Open LLM settings</a>
-            {#if isPersistingSettings}
-            <span class="config-hint saving">Saving…</span>
-            {:else if settingsPersistError}
-            <span class="config-error">{settingsPersistError}</span>
-            {/if}
-        </div>
-    </aside>
-    
+    <ChatSidebar
+        {isCollapsed}
+        settingsHref={resolve('/settings')}
+        {isPersistingSettings}
+        {settingsPersistError}
+        on:newChat={startNewChat}
+    />
 
     <div class="flex flex-col md:flex-row w-full h-full">
-       
-        <!-- chat area -->
         <section class="chat-area relative w-full h-full">
-            <div class="messages">
-            {#each messages as msg (msg.text)}
-                <div class="message {msg.sender}" transition:fly={{ y: 10, duration: 150 }}>
-                {msg.text}
-                </div>
-            {/each}
-            </div>
-            
-            <div class="flex justify-center pb-10">
-            <div class="flex flex-row">
-            <div class="config-group">
-            <label>
-            <span>Provider</span>
-            <select
-                bind:value={selectedProviderId}
-                on:change={() => handleProviderChange(selectedProviderId)}
-                disabled={providersLoading || !providers.length}
-            >
-                {#each providers as option (option.id)}
-                <option value={option.id}>{option.label}</option>
-                {/each}
-            </select>
-            </label>
-            {#if providersLoading}
-            <p class="config-hint">Loading providers…</p>
-            {:else if computedProvidersError}
-            <p class="config-error">{computedProvidersError}</p>
-            {:else if currentProvider.description}
-            <p class="config-hint">{currentProvider.description}</p>
-            {/if}
-            {#if settingsLoadError}
-            <p class="config-error">{settingsLoadError}</p>
-            {/if}
-        </div>
-        <div class="config-group">
-            <label>
-            <span>Model</span>
-            <select
-                bind:value={selectedModel}
-                disabled={isModelsLoading || !availableModels.length}
-            >
-                {#each availableModels as modelName (modelName)}
-                <option value={modelName}>{modelName}</option>
-                {/each}
-            </select>
-            </label>
-            {#if isModelsLoading}
-            <p class="config-hint">Loading models…</p>
-            {:else if currentModelError}
-            <p class="config-error">{currentModelError}</p>
-            {:else if !availableModels.length}
-            <p class="config-hint">No models available for this provider.</p>
-            {/if}
-        </div>
-       
-        </div>
-                <div class="input-bar rounded-3xl w-5/6">
-                    <textarea
-                        bind:value={input}
-                        rows="1"
-                        placeholder="Send a message..."
-                        on:keydown={handleKey}
-                    ></textarea>
-                    <button class="send-btn" on:click={sendMessage}>➤</button>
-                </div>
-                
-            </div>
-            
-        </section>
+            <ChatMessages {messages} />
 
+            <div class="flex justify-center pb-10">
+                <div class="flex flex-col md:flex-row md:items-end gap-6 w-full md:w-auto">
+                    <ChatProviderControls
+                        {providers}
+                        {providersLoading}
+                        {selectedProviderId}
+                        {currentProvider}
+                        {computedProvidersError}
+                        {settingsLoadError}
+                        {availableModels}
+                        {selectedModel}
+                        {isModelsLoading}
+                        {currentModelError}
+                        on:providerChange={({ detail }) => handleProviderChange(detail)}
+                        on:modelChange={({ detail }) => (selectedModel = detail)}
+                    />
+                    <div class="composer-input-wrapper">
+                        <ChatInput
+                            bind:value={input}
+                            {isSending}
+                            isDisabled={isModelsLoading || !selectedModel}
+                            on:send={sendMessage}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {#if error}
+                <p class="error-banner" role="alert">{error}</p>
+            {/if}
+        </section>
 
         <div class="flex w-1/3 h-full">
             <div class="absolute z-50 h-full right-0 w-1/3">
-                <Live2DPreview
-                bind:this={live2dRef}
-                bind:expressions={expressionOptions}
-                modelPath={previewModel.modelPath}
-                cubismCorePath={previewModel.cubismCorePath ?? DEFAULT_CORE_PATH}
-                scaleMultiplier={previewModel.scaleMultiplier ?? 1}
-                targetHeightRatio={previewModel.targetHeightRatio ?? 0.9}
-                anchorX={previewModel.anchor?.x ?? 0.5}
-                anchorY={previewModel.anchor?.y ?? 0.5}
-                positionX={previewModel.position?.x ?? 0.5}
-                positionY={previewModel.position?.y ?? 0.95}
+                <ModelPreviewPanel
+                    models={demoModels}
+                    {currentModel}
+                    {previewIndex}
+                    on:prev={prevModel}
+                    on:next={nextModel}
+                    on:confirm={confirmModel}
                 />
-                <div class="expr"> <select bind:value={selectedExpression} on:change={() => live2dRef?.setExpression(selectedExpression)} disabled={!expressionOptions.length} > 
-                    {#each expressionOptions as name} 
-                    <option value={name}>{name}</option> {/each} </select> </div>
-                        <div class="model-selector">
-                            <button on:click={prevModel} class="arrow-btn">⟨</button>
-                            <button class="confirm-btn" on:click={confirmModel}>
-                                {demoModels[previewIndex].label}
-                            </button>
-                            <button on:click={nextModel} class="arrow-btn">⟩</button>
-                        </div>
             </div>
+            <div class="expr"> <select bind:value={selectedExpression} on:change={() => live2dRef?.setExpression(selectedExpression)} disabled={!expressionOptions.length} > 
+                {#each expressionOptions as name} 
+                <option value={name}>{name}</option> {/each} </select> </div>
         </div>
     </div>
 </div>
@@ -491,50 +351,6 @@
     }
 
     /* sidebar */
-    .sidebar {
-        width: 260px;
-        background: #202123;
-        color: #ececf1;
-        padding: 20px;
-        box-sizing: border-box;
-        transition: transform 0.3s ease;
-        overflow-y: auto;
-    }
-    .sidebar.collapsed {
-        transform: translateX(-100%);
-    }
-
-    .new-chat-btn {
-        background: #10a37f;
-        border: none;
-        color: white;
-        padding: 10px;
-        width: 100%;
-        border-radius: 6px;
-        cursor: pointer;
-        font-weight: 600;
-        margin-bottom: 20px;
-    }
-    .new-chat-btn:hover {
-        background: #0d8c6c;
-    }
-
-    .chat-list h3 {
-        font-size: 0.9rem;
-        color: #8e8e8f;
-        margin-bottom: 10px;
-    }
-    .chat-list li {
-        background: #2a2b32;
-        padding: 8px 10px;
-        border-radius: 6px;
-        margin-bottom: 8px;
-        cursor: pointer;
-    }
-    .chat-list li:hover {
-        background: #3b3c42;
-    }
-
     /* toggle */
     .toggle-btn {
         position: fixed;
@@ -564,118 +380,6 @@
     }
 
 
-    .config-group {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        min-width: 180px;
-    }
-
-    .config-hint,
-    .config-error {
-        margin: 0;
-        font-size: 0.75rem;
-    }
-
-    .config-hint {
-        color: #8e8e8f;
-    }
-
-    .config-hint.saving {
-        color: #cfcfd3;
-    }
-
-    .config-error {
-        color: #ff9aa2;
-    }
-
-    .config-meta {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        min-width: 100%;
-        font-size: 0.75rem;
-        color: #8e8e8f;
-    }
-
-    .settings-link {
-        color: #10a37f;
-        text-decoration: none;
-        font-weight: 600;
-    }
-
-    .settings-link:hover {
-        text-decoration: underline;
-    }
-
-    .messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .message {
-        max-width: 70%;
-        padding: 12px 16px;
-        border-radius: 10px;
-        line-height: 1.4;
-        word-wrap: break-word;
-    }
-
-    .bot {
-        background: #444654;
-        align-self: flex-start;
-    }
-
-    .user {
-        background: #10a37f;
-        align-self: flex-end;
-    }
-
-    /* input bar */
-    .input-bar {
-        position: sticky;
-        bottom: 0;
-        background: #40414f;
-        padding: 10px 16px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .input-bar textarea {
-        flex: 1;
-        resize: none;
-        border: none;
-        border-radius: 8px;
-        padding: 10px;
-        font-size: 1rem;
-        background: #40414f;
-        color: white;
-        outline: none;
-    }
-
-    .send-btn {
-        background: #10a37f;
-        border: none;
-        color: white;
-        padding: 10px 14px;
-        border-radius: 6px;
-        cursor: pointer;
-        min-width: 42px;
-    }
-    .send-btn:hover {
-        background: #0d8c6c;
-    }
-
-    .send-btn:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-    }
-
     .error-banner {
         margin: 8px 20px 20px;
         padding: 10px 12px;
@@ -685,53 +389,13 @@
         font-size: 0.85rem;
     }
 
-    @media (max-width: 800px) {
-        .sidebar {
-        position: fixed;
-        height: 100%;
-        top: 0;
-        left: 0;
-        z-index: 1000;
-        }
-        .chat-area {
-        margin-left: 0 !important;
-        }
+    .composer-input-wrapper {
+        width: min(720px, 100%);
     }
 
-    .model-selector {
-	    position: absolute;
-	    bottom: 5%;
-	    left: 50%;
-	    transform: translateX(-50%);
-	    display: flex;
-	    align-items: center;
-	    gap: 12px;
-	    background: rgba(34, 34, 34, 0.8);
-	    padding: 8px 16px;
-	    border-radius: 12px;
-	    backdrop-filter: blur(6px);
-    }
-
-    .arrow-btn {
-	    background: transparent;
-	    color: #fff;
-	    font-size: 1.5rem;
-	    border: none;
-	    cursor: pointer;
-    }
-
-    .confirm-btn {
-	    background: #10a37f;
-	    color: white;
-	    font-weight: 600;
-	    padding: 6px 12px;
-	    border: none;
-	    border-radius: 6px;
-	    cursor: pointer;
-    }
-
-    .confirm-btn:hover {
-    	background: #0d8c6c;
+    .composer-input-wrapper :global(.input-bar) {
+        width: 100%;
+        border-radius: 24px;
     }
 
     .expr {
