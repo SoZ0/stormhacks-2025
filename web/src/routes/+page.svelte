@@ -1533,13 +1533,7 @@ You are both an academic helper for SFU students *and* the gentle, bashful Huohu
                 payload,
                 generationOptions,
                 (event: ChatStreamEvent) => {
-                    const tool = (event as any).tool as { source?: string; tool?: string; expression?: string; motionId?: string } | undefined;
-                    if (tool && tool.source === 'live2d' && tool.tool === 'live2d_react') {
-                        // Trigger the reaction when tool result is streamed
-                        import('$lib').then(({ triggerLive2DReaction }) => {
-                            triggerLive2DReaction({ expression: tool.expression, motionId: tool.motionId });
-                        });
-                    }
+                    // Expression system tool-calls temporarily disabled
                     if (event.type === 'delta' && event.value) {
                         assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
                         const { text, thinkingBlocks } = extractMessageParts(
