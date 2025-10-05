@@ -752,16 +752,25 @@
                       Loading voices…
                     </div>
                   {:else}
-                    <select
-                      class="rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-sm text-surface-100 focus:border-primary-500 focus:outline-none disabled:opacity-60"
-                      bind:value={editForm.voiceId}
-                      disabled={voiceOptionsLoading}
-                    >
-                      <option value="">Default voice</option>
-                      {#each displayVoiceOptions as voice}
-                        <option value={voice.id}>{voice.name}</option>
-                      {/each}
-                    </select>
+                    <div class="flex flex-col gap-2">
+                      <select
+                        class="rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-sm text-surface-100 focus:border-primary-500 focus:outline-none disabled:opacity-60"
+                        bind:value={editForm.voiceId}
+                        disabled={voiceOptionsLoading}
+                      >
+                        <option value="">Default voice</option>
+                        {#each displayVoiceOptions as voice}
+                          <option value={voice.id}>{voice.name}</option>
+                        {/each}
+                      </select>
+                      <div class="text-[10px] uppercase tracking-[0.15em] text-surface-500">Or enter voice ID</div>
+                      <input
+                        class="rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-sm text-surface-100 focus:border-primary-500 focus:outline-none"
+                        bind:value={editForm.voiceId}
+                        placeholder="elevenlabs-voice-id"
+                        spellcheck={false}
+                      />
+                    </div>
                   {/if}
                   {#if voiceOptionsError}
                     <div class="flex items-center gap-2 text-xs text-error-200">

@@ -138,6 +138,16 @@
     });
   };
 
+  const audioDownloadName = (message: ChatDisplayMessage, index: number): string => {
+    const suffix = message.id ? message.id.slice(0, 8) : `msg-${index}`;
+    const mime = message.audio?.mimeType ?? 'audio/mpeg';
+    let extension = 'mp3';
+    if (mime.includes('wav')) extension = 'wav';
+    else if (mime.includes('ogg')) extension = 'ogg';
+    else if (mime.includes('aac')) extension = 'aac';
+    return `stormhacks-response-${suffix}.${extension}`;
+  };
+
   onMount(async () => {
     await tick();
     scrollToBottom();
@@ -194,7 +204,7 @@
 				</div>
 			{/if}
 			{#if item.message.sender === 'bot' && item.message.audio?.dataUrl}
-				<div class="flex justify-end">
+				<div class="flex justify-end gap-2">
 					<button
 						type="button"
 						class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200"
@@ -205,8 +215,20 @@
 							<path d="M5 10v4h2l3 3V7L7 10H5zm9.14-3.17a1 1 0 0 1 1.37.36A6.98 6.98 0 0 1 17 12a6.98 6.98 0 0 1-1.49 4.81 1 1 0 0 1-1.73-1.01A4.98 4.98 0 0 0 15 12a4.97 4.97 0 0 0-.78-2.68 1 1 0 0 1 .08-1.49l.84-.83z" />
 							<path d="M16.55 5.55a1 1 0 1 1 1.41-1.42A9 9 0 0 1 20 12a9 9 0 0 1-2.04 5.87 1 1 0 1 1-1.58-1.23A7 7 0 0 0 18 12a7 7 0 0 0-1.45-4.32l-.01-.01-.01-.01z" />
 						</svg>
-						<span>Play audio</span>
+						<span>Play</span>
 					</button>
+					<a
+						href={item.message.audio.dataUrl}
+						download={audioDownloadName(item.message, index)}
+						class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200"
+						aria-label="Download response audio"
+					>
+						<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M12 3a1 1 0 0 1 1 1v9.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1z" />
+							<path d="M5 15a1 1 0 0 1 1 1v2h12v-2a1 1 0 1 1 2 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
+						</svg>
+						<span>Download</span>
+					</a>
 				</div>
 			{/if}
 		</div>
