@@ -15,6 +15,9 @@
     import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
     import { AppBar } from '@skeletonlabs/skeleton-svelte';
     import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+    import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
+    import { availableThemes, theme } from '$lib/stores/theme';
+    import { get } from 'svelte/store';
     import ChatMessages from '$lib/components/chat/ChatMessages.svelte';
     import ChatProviderControls, {
         type ProviderSelectionState,
@@ -90,6 +93,14 @@
 
     const normalizeVisibleText = (value: string): string => value.replace(/^\s*\n?/, '').trimEnd();
     const stripThinkingTags = (value: string): string => value.replace(/<\/?think>/gi, '').trim();
+
+    const themeOptions = availableThemes;
+    const cycleTheme = () => {
+        const current = get(theme);
+        const currentIndex = themeOptions.findIndex((option) => option.id === current);
+        const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % themeOptions.length;
+        theme.set(themeOptions[nextIndex]?.id ?? themeOptions[0]?.id ?? 'stormhacks');
+    };
 
     const extractMessageParts = (
         raw: string
@@ -2010,6 +2021,17 @@
 
 {#snippet appBarTrail()}
     <div class="flex items-center gap-2">
+        <div class="hidden sm:block">
+            <ThemeSwitcher />
+        </div>
+        <button
+            type="button"
+            class="btn btn-icon btn-icon-base border border-surface-800/50 bg-surface-950/60 text-base text-surface-200 shadow-lg shadow-surface-950/20 transition hover:text-surface-50 sm:hidden"
+            on:click={cycleTheme}
+            aria-label="Cycle theme"
+        >
+            🎨
+        </button>
         <button
             type="button"
             class="btn btn-icon btn-icon-base border border-surface-800/50 bg-surface-950/60 text-base text-surface-200 shadow-lg shadow-surface-950/20 transition hover:text-surface-50 lg:hidden"
