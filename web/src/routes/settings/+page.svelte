@@ -33,6 +33,11 @@
   let removingProviderId: ProviderId | null = null;
   let removeStatus: 'idle' | 'removing' | 'success' = 'idle';
   let removeError: string | null = null;
+  let ttsHasApiKey = false;
+  let ttsInput = '';
+  let ttsStatus: 'idle' | 'saving' | 'success' = 'idle';
+  let ttsError: string | null = null;
+  let ttsPendingAction: 'save' | 'clear' | null = null;
 
   const loadProviders = async () => {
     providersLoading = true;
@@ -74,6 +79,7 @@
       }
 
       const serverSettings = data.settings;
+      ttsHasApiKey = false;
       if (serverSettings && typeof serverSettings === 'object') {
         if (typeof serverSettings.provider === 'string') {
           const providerExists = providers.some((provider) => provider.id === serverSettings.provider);
@@ -84,11 +90,21 @@
         if (typeof serverSettings.model === 'string') {
           selectedModel = serverSettings.model;
         }
+
+        const speechSettings = (serverSettings as { tts?: unknown }).tts;
+        if (speechSettings && typeof speechSettings === 'object') {
+          ttsHasApiKey = Boolean(
+            (speechSettings as { hasElevenLabsApiKey?: unknown }).hasElevenLabsApiKey
+          );
+        } else {
+          ttsHasApiKey = false;
+        }
       }
     } catch (error) {
       loadError = error instanceof Error ? error.message : 'Unable to load saved settings';
       selectedProviderId = providers[0]?.id ?? defaultProvider.id;
       selectedModel = '';
+      ttsHasApiKey = false;
     }
   };
 
@@ -280,6 +296,58 @@
     }
   };
 
+  const updateTtsKey = async (value: string, action: 'save' | 'clear') => {
+    if (ttsStatus === 'saving') {
+      return;
+    }
+
+    ttsError = null;
+    ttsStatus = 'saving';
+    ttsPendingAction = action;
+
+    try {
+      const response = await fetch('/api/settings/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: value })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data) {
+        throw new Error(data?.error ?? `Unable to update ElevenLabs key (${response.status})`);
+      }
+
+      const hasKey = Boolean(data.settings?.hasElevenLabsApiKey);
+      ttsHasApiKey = hasKey;
+      ttsStatus = 'success';
+      ttsInput = '';
+      setTimeout(() => {
+        ttsStatus = 'idle';
+      }, 2000);
+    } catch (error) {
+      ttsStatus = 'idle';
+      ttsError = error instanceof Error ? error.message : 'Unable to update ElevenLabs API key';
+    } finally {
+      ttsPendingAction = null;
+    }
+  };
+
+  const handleSaveTtsKey = () => {
+    if (!ttsInput.trim()) {
+      return;
+    }
+
+    void updateTtsKey(ttsInput.trim(), 'save');
+  };
+
+  const handleClearTtsKey = () => {
+    if (!ttsHasApiKey) {
+      return;
+    }
+
+    void updateTtsKey('', 'clear');
+  };
+
   onMount(async () => {
     await loadProviders();
     await loadSettings();
@@ -386,6 +454,62 @@
 
       {#if saveStatus === 'saved'}
         <p class="success">Preferences saved.</p>
+      {/if}
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Speech Settings</h2>
+    <p class="intro">
+      Configure ElevenLabs text-to-speech by adding your API key. Keys are stored securely and never exposed in
+      client-side code.
+    </p>
+
+    <form on:submit|preventDefault={handleSaveTtsKey} class="stack">
+      <div class="field">
+        <label for="elevenlabs-api-key">ElevenLabs API Key</label>
+        <input
+          id="elevenlabs-api-key"
+          type="password"
+          bind:value={ttsInput}
+          placeholder={ttsHasApiKey ? 'Key stored. Enter a new key to replace it.' : 'sk_...'}
+          autocomplete="off"
+        />
+        {#if ttsHasApiKey}
+          <p class="hint">A key is stored. Enter a new key to replace it or clear it below.</p>
+        {:else}
+          <p class="hint">Provide an ElevenLabs API key to enable voice responses.</p>
+        {/if}
+      </div>
+
+      {#if ttsError}
+        <p class="error">{ttsError}</p>
+      {/if}
+
+      <div class="button-row">
+        <button type="submit" disabled={ttsStatus === 'saving' || !ttsInput.trim()}>
+          {#if ttsStatus === 'saving' && ttsPendingAction === 'save'}
+            Saving…
+          {:else}
+            Save Key
+          {/if}
+        </button>
+        <button
+          type="button"
+          class="secondary"
+          on:click={handleClearTtsKey}
+          disabled={ttsStatus === 'saving' || !ttsHasApiKey}
+        >
+          {#if ttsStatus === 'saving' && ttsPendingAction === 'clear'}
+            Clearing…
+          {:else}
+            Clear Stored Key
+          {/if}
+        </button>
+      </div>
+
+      {#if ttsStatus === 'success'}
+        <p class="success">Speech settings updated.</p>
       {/if}
     </form>
   </section>
@@ -561,6 +685,12 @@
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
+  }
+
+  .button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
 
   .field {

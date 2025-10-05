@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "custom-hiyori-free-en",
+    "label": "hiyori_free_en",
+    "slug": "hiyori-free-en",
+    "modelPath": "hiyori_free_en/runtime/hiyori_free_t08.model3.json",
+    "availableModelFiles": [
+      "hiyori_free_en/runtime/hiyori_free_t08.model3.json"
+    ],
+    "createdAt": 1759638430011,
+    "updatedAt": 1759638430011,
+    "cubismCorePath": "/vendor/live2d/live2dcubismcore.min.js",
+    "anchor": {
+      "x": 0.5,
+      "y": 0.5
+    },
+    "position": {
+      "x": 0.5,
+      "y": 0.95
+    },
+    "scaleMultiplier": 1,
+    "targetHeightRatio": 0.9
+  }
+]

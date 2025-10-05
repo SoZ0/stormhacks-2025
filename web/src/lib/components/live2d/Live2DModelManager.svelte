@@ -134,6 +134,7 @@
     created: ModelOption;
     updated: ModelOption;
     deleted: string;
+    draftChange: ModelOption | null;
   }>();
 
   let uploadInput: HTMLInputElement | null = null;
@@ -154,6 +155,28 @@
   type Live2DPreviewHandle = { setExpression: (name: string) => void };
   let previewRef: Live2DPreviewHandle | null = null;
   let modelsSignature = '';
+  let draftSignature = '';
+
+  const createDraftSignature = (model: ModelOption | null | undefined) => {
+    if (!model) return '';
+    return JSON.stringify({
+      id: model.id,
+      label: model.label,
+      modelPath: model.modelPath,
+      cubismCorePath: model.cubismCorePath,
+      anchor: model.anchor,
+      position: model.position,
+      scaleMultiplier: model.scaleMultiplier,
+      targetHeightRatio: model.targetHeightRatio
+    });
+  };
+
+  const emitDraftChange = (model: ModelOption | null, force = false) => {
+    const nextSignature = createDraftSignature(model);
+    if (!force && nextSignature === draftSignature) return;
+    draftSignature = nextSignature;
+    dispatch('draftChange', model);
+  };
 
   const triggerUpload = () => {
     uploadInput?.click();
@@ -170,6 +193,8 @@
     previewExpressions = [];
     selectedPreviewExpression = '';
     previewRef = null;
+    draftSignature = '';
+    emitDraftChange(null, true);
   };
 
   const closeModal = () => {
@@ -183,6 +208,7 @@
     editError = null;
     previewExpressions = [];
     selectedPreviewExpression = '';
+    draftSignature = '';
   };
 
   const handleFileChange = async (event: Event) => {
@@ -347,6 +373,19 @@
       2
     );
 
+    const absolutePath = modelPath ?? editingModel.modelPath ?? editingModel.availableModelFiles?.[0];
+    const cubismCore = editForm.cubismCorePath.trim() || editingModel.cubismCorePath;
+    const nextDraft: ModelOption = {
+      ...editingModel,
+      label: editForm.label.trim() || editingModel.label,
+      modelPath: absolutePath ?? editingModel.modelPath,
+      cubismCorePath: cubismCore,
+      anchor: { x: anchorX, y: anchorY },
+      position: { x: positionX, y: positionY },
+      scaleMultiplier: scaleMultiplierValue,
+      targetHeightRatio: targetHeightRatioValue
+    };
+
     previewConfig = {
       modelPath: modelPath ?? undefined,
       cubismCorePath: editForm.cubismCorePath.trim() || editingModel.cubismCorePath,
@@ -355,9 +394,12 @@
       scaleMultiplier: scaleMultiplierValue,
       targetHeightRatio: targetHeightRatioValue
     };
+
+    emitDraftChange(nextDraft);
   } else {
     previewConfig = {};
     previewExpressions = [];
+    emitDraftChange(null);
   }
 
   $: if (!previewExpressions.length) {

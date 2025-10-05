@@ -109,9 +109,9 @@
 </script>
 
 <aside
-    class={`fixed inset-y-0 left-0 z-30 h-full w-72 max-w-[80vw] transition-transform duration-300 ${
+    class={`fixed inset-y-0 left-0 z-30 h-full w-72 max-w-[80vw] overflow-hidden transition-transform duration-300 ${
         isCollapsed ? '-translate-x-full lg:translate-x-0' : 'translate-x-0'
-    } lg:static lg:w-72 xl:w-80`}
+    } lg:static lg:h-full lg:w-72 lg:overflow-hidden xl:w-80`}
     aria-hidden={isCollapsed}
     transition:fly|local={{ x: -200, duration: 200 }}
 >

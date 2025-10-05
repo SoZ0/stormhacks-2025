@@ -1,16 +1,34 @@
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
-import { ELEVENLABS_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
+import { getStoredSettings } from '$lib/server/settingsStore';
 
-if (!ELEVENLABS_API_KEY) {
-  throw new Error(
-    'Missing ELEVENLABS_API_KEY in environment. Create a .env with ELEVENLABS_API_KEY=sk_… and restart.'
+const missingKeyResponse = () =>
+  new Response(
+    JSON.stringify({
+      error: 'Missing ElevenLabs API key. Add one in settings or configure ELEVENLABS_API_KEY in the environment.'
+    }),
+    {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    }
   );
-}
 
-const eleven = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY });
+const hasArrayBuffer = (value: unknown): value is { arrayBuffer: () => Promise<ArrayBuffer> } =>
+  Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as { arrayBuffer?: unknown }).arrayBuffer === 'function'
+  );
 
-export const POST: RequestHandler = async ({ request }) => {
+const arrayBufferFromView = (view: ArrayBufferView | Uint8Array): ArrayBuffer => {
+  const slice = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  const copy = new Uint8Array(slice.length);
+  copy.set(slice);
+  return copy.buffer;
+};
+
+export const POST: RequestHandler = async ({ request, cookies }) => {
   let body: any;
   try {
     body = await request.json();
@@ -30,6 +48,15 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   try {
+    const storedSettings = getStoredSettings(cookies);
+    const apiKey = storedSettings.tts.elevenLabsApiKey ?? env.ELEVENLABS_API_KEY;
+
+    if (!apiKey) {
+      return missingKeyResponse();
+    }
+
+    const eleven = new ElevenLabsClient({ apiKey });
+
     // Call the SDK
     const sdkRes = await eleven.textToSpeech.convert(voiceId, {
       text,
@@ -37,13 +64,19 @@ export const POST: RequestHandler = async ({ request }) => {
       outputFormat: 'mp3_44100_128'
     });
 
-    // sdkRes may be a Buffer (Node) or a Response-like. Handle both:
-    let bodyData: ArrayBuffer | Uint8Array;
-    if (typeof (sdkRes as any).arrayBuffer === 'function') {
-      bodyData = await (sdkRes as Response).arrayBuffer();
+    // sdkRes may be a Buffer (Node), ArrayBuffer, or a Response-like object. Normalize to ArrayBuffer.
+    let bodyData: ArrayBuffer;
+
+    if (hasArrayBuffer(sdkRes)) {
+      bodyData = await sdkRes.arrayBuffer();
+    } else if (sdkRes instanceof Uint8Array) {
+      bodyData = arrayBufferFromView(sdkRes);
+    } else if (sdkRes instanceof ArrayBuffer) {
+      bodyData = sdkRes;
+    } else if (ArrayBuffer.isView(sdkRes)) {
+      bodyData = arrayBufferFromView(sdkRes as ArrayBufferView);
     } else {
-      // sdkRes is likely a Node Buffer / Uint8Array
-      bodyData = sdkRes as Uint8Array;
+      throw new Error('Unexpected ElevenLabs response type.');
     }
 
     return new Response(bodyData, {

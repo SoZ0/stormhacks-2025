@@ -11,10 +11,15 @@ export interface LLMGenerationOptions {
   maxOutputTokens: number | null;
 }
 
+export interface TtsSettings {
+  elevenLabsApiKey: string | null;
+}
+
 export interface LLMSettings {
   provider: ProviderId;
   model: string;
   options: LLMGenerationOptions;
+  tts: TtsSettings;
 }
 
 export const defaultGenerationOptions: LLMGenerationOptions = {
@@ -25,10 +30,15 @@ export const defaultGenerationOptions: LLMGenerationOptions = {
   maxOutputTokens: null
 };
 
+export const defaultTtsSettings: TtsSettings = {
+  elevenLabsApiKey: null
+};
+
 export const defaultSettings: LLMSettings = {
   provider: defaultProvider.id,
   model: '',
-  options: { ...defaultGenerationOptions }
+  options: { ...defaultGenerationOptions },
+  tts: { ...defaultTtsSettings }
 };
 
 const toNullableNumber = (value: unknown): number | null => {
@@ -61,12 +71,33 @@ export const normalizeGenerationOptions = (value: unknown): LLMGenerationOptions
   };
 };
 
+export const normalizeTtsSettings = (value: unknown): TtsSettings => {
+  if (!value || typeof value !== 'object') {
+    return { ...defaultTtsSettings };
+  }
+
+  const source = value as { elevenLabsApiKey?: unknown };
+  const rawKey = source.elevenLabsApiKey;
+
+  if (typeof rawKey === 'string') {
+    const trimmed = rawKey.trim();
+    return { elevenLabsApiKey: trimmed.length > 0 ? trimmed : null };
+  }
+
+  if (rawKey === null) {
+    return { elevenLabsApiKey: null };
+  }
+
+  return { ...defaultTtsSettings };
+};
+
 export const parseSettings = (raw: string | undefined | null): LLMSettings | null => {
   if (!raw) return null;
 
   try {
     const parsed = JSON.parse(raw) as Partial<LLMSettings> & {
       options?: unknown;
+      tts?: unknown;
     };
     if (!parsed || typeof parsed !== 'object') return null;
 
@@ -77,9 +108,35 @@ export const parseSettings = (raw: string | undefined | null): LLMSettings | nul
     if (typeof model !== 'string') return null;
 
     const options = normalizeGenerationOptions(parsed.options);
+    const tts = normalizeTtsSettings(parsed.tts);
 
-    return { provider, model, options };
+    return { provider, model, options, tts };
   } catch {
     return null;
   }
+};
+
+export interface ClientSettings {
+  provider: ProviderId;
+  model: string;
+  options: LLMGenerationOptions;
+  tts: {
+    hasElevenLabsApiKey: boolean;
+  };
+}
+
+export const maskSettingsForClient = (settings: LLMSettings): ClientSettings => ({
+  provider: settings.provider,
+  model: settings.model,
+  options: { ...settings.options },
+  tts: {
+    hasElevenLabsApiKey: Boolean(settings.tts.elevenLabsApiKey)
+  }
+});
+
+export const sanitizeElevenLabsApiKey = (value: unknown): string | null => {
+  if (value === null) return null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 };

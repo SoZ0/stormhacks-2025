@@ -1,34 +1,32 @@
 import { json } from '@sveltejs/kit';
-import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
-import {
-  SETTINGS_COOKIE,
-  defaultSettings,
-  normalizeGenerationOptions,
-  parseSettings,
-  type LLMSettings
-} from '$lib/llm/settings';
+import { normalizeGenerationOptions, type LLMSettings } from '$lib/llm/settings';
 import { findProvider, getProviders } from '$lib/server/providerStore';
-
-const cookieOptions = {
-  path: '/',
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  secure: !dev,
-  maxAge: 60 * 60 * 24 * 365
-};
+import {
+  createDefaultSettings,
+  getClientSettings,
+  getStoredSettings,
+  saveStoredSettings,
+  updateStoredSettings
+} from '$lib/server/settingsStore';
 
 export const GET: RequestHandler = async ({ cookies }) => {
-  const raw = cookies.get(SETTINGS_COOKIE);
-  let settings = parseSettings(raw) ?? defaultSettings;
-
   const providers = getProviders(cookies);
+  let settings = getStoredSettings(cookies);
+
   const hasProvider = providers.some((provider) => provider.id === settings.provider);
   if (!hasProvider) {
-    settings = { ...defaultSettings };
+    const fallback = createDefaultSettings();
+    settings = {
+      ...fallback,
+      tts: { ...settings.tts }
+    } satisfies LLMSettings;
+    saveStoredSettings(cookies, settings);
   }
 
-  return json({ settings });
+  const clientSettings = getClientSettings(settings);
+
+  return json({ settings: clientSettings });
 };
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
@@ -56,8 +54,15 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   }
 
   const normalizedOptions = normalizeGenerationOptions(options);
-  const settings: LLMSettings = { provider: providerConfig.id, model, options: normalizedOptions };
-  cookies.set(SETTINGS_COOKIE, JSON.stringify(settings), cookieOptions);
 
-  return json({ settings });
+  const updated = updateStoredSettings(cookies, (current) => ({
+    ...current,
+    provider: providerConfig.id,
+    model,
+    options: normalizedOptions
+  }));
+
+  const clientSettings = getClientSettings(updated);
+
+  return json({ settings: clientSettings });
 };

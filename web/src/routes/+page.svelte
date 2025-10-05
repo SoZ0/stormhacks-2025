@@ -94,14 +94,50 @@
         return { text: visible, thinking: partialThinking || null, hasThinking: true };
     };
 
+    interface ChatConfig {
+        systemPrompt: string;
+        generationOptions: LLMGenerationOptions;
+    }
+
+    interface PersistedChatConfig {
+        systemPrompt?: string | null;
+        generationOptions?: unknown;
+    }
+
     interface PersistedChatState {
         activeChatId: string;
         chats: ChatSummary[];
         history: Record<string, Message[]>;
+        configurations?: Record<string, PersistedChatConfig>;
     }
+
+    const cloneGenerationOptions = (options: LLMGenerationOptions): LLMGenerationOptions => ({
+        temperature: options.temperature ?? null,
+        topP: options.topP ?? null,
+        topK: options.topK ?? null,
+        maxInputTokens: options.maxInputTokens ?? null,
+        maxOutputTokens: options.maxOutputTokens ?? null
+    });
+
+    const areGenerationOptionsEqual = (a: LLMGenerationOptions, b: LLMGenerationOptions): boolean =>
+        (a.temperature ?? null) === (b.temperature ?? null) &&
+        (a.topP ?? null) === (b.topP ?? null) &&
+        (a.topK ?? null) === (b.topK ?? null) &&
+        (a.maxInputTokens ?? null) === (b.maxInputTokens ?? null) &&
+        (a.maxOutputTokens ?? null) === (b.maxOutputTokens ?? null);
+
+    const cloneChatConfig = (config: ChatConfig): ChatConfig => ({
+        systemPrompt: config.systemPrompt ?? '',
+        generationOptions: cloneGenerationOptions(config.generationOptions)
+    });
 
     let chats: ChatSummary[] = [];
     let chatHistory: Record<string, Message[]> = {};
+    let chatConfigurations: Record<string, ChatConfig> = {};
+    let baseChatConfig: ChatConfig = {
+        systemPrompt: '',
+        generationOptions: { ...defaultGenerationOptions }
+    };
     let activeChatId = '';
     let pendingChatIds: string[] = [];
 
@@ -135,6 +171,8 @@
         if (!id) return;
         if (!pendingChatIds.includes(id)) return;
         pendingChatIds = pendingChatIds.filter((pendingId) => pendingId !== id);
+        const { [id]: _removedConfig, ...restConfigs } = chatConfigurations;
+        chatConfigurations = restConfigs;
     };
 
     const updateChatSummary = (
@@ -156,16 +194,80 @@
         }
     };
 
+    function applyChatConfig(id: string) {
+        const stored = chatConfigurations[id];
+        if (stored) {
+            systemPrompt = stored.systemPrompt ?? '';
+            generationOptions = cloneGenerationOptions(stored.generationOptions);
+            return;
+        }
+
+        const fallback = cloneChatConfig(baseChatConfig);
+        chatConfigurations = { ...chatConfigurations, [id]: fallback };
+        systemPrompt = fallback.systemPrompt ?? '';
+        generationOptions = cloneGenerationOptions(fallback.generationOptions);
+    }
+
+    function persistActiveChatConfig(options?: { save?: boolean }) {
+        if (!activeChatId) return;
+        const nextConfig: ChatConfig = {
+            systemPrompt,
+            generationOptions: cloneGenerationOptions(generationOptions)
+        };
+        chatConfigurations = { ...chatConfigurations, [activeChatId]: nextConfig };
+        if (options?.save ?? true) {
+            saveChatState();
+        }
+    }
+
+    function applyBaseGenerationOptions(options: LLMGenerationOptions) {
+        const shouldUpdateActive = areGenerationOptionsEqual(
+            generationOptions,
+            baseChatConfig.generationOptions
+        );
+        baseChatConfig = {
+            ...baseChatConfig,
+            generationOptions: cloneGenerationOptions(options)
+        };
+        if (shouldUpdateActive && activeChatId) {
+            generationOptions = cloneGenerationOptions(options);
+            persistActiveChatConfig({ save: false });
+        }
+    }
+
+    const ensureActiveChatConfigSaved = () => {
+        if (!activeChatId) return;
+        const currentConfig: ChatConfig = {
+            systemPrompt,
+            generationOptions: cloneGenerationOptions(generationOptions)
+        };
+        const existing = chatConfigurations[activeChatId];
+        if (!existing || existing.systemPrompt !== currentConfig.systemPrompt || !areGenerationOptionsEqual(existing.generationOptions, currentConfig.generationOptions)) {
+            chatConfigurations = { ...chatConfigurations, [activeChatId]: currentConfig };
+        }
+    };
+
     const saveChatState = () => {
         if (!browser) return;
         try {
+            ensureActiveChatConfigSaved();
             const history = Object.fromEntries(
                 Object.entries(chatHistory).map(([id, list]) => [id, sanitizeMessagesForStore(list)])
+            );
+            const configurations = Object.fromEntries(
+                Object.entries(chatConfigurations).map(([id, config]) => [
+                    id,
+                    {
+                        systemPrompt: config.systemPrompt ?? '',
+                        generationOptions: cloneGenerationOptions(config.generationOptions)
+                    }
+                ])
             );
             const payload: PersistedChatState = {
                 activeChatId,
                 chats,
-                history
+                history,
+                configurations
             };
             localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(payload));
         } catch (err) {
@@ -217,6 +319,22 @@
                 }
             }
             chatHistory = nextHistory;
+            const nextConfigurations: Record<string, ChatConfig> = {};
+            const configEntries = Object.entries(parsed.configurations ?? {});
+            for (const [id, rawConfig] of configEntries) {
+                if (!id) continue;
+                const persistedConfig = (rawConfig ?? null) as PersistedChatConfig | null;
+                const system =
+                    persistedConfig && typeof persistedConfig.systemPrompt === 'string'
+                        ? persistedConfig.systemPrompt
+                        : '';
+                const options = normalizeGenerationOptions(persistedConfig?.generationOptions);
+                nextConfigurations[id] = {
+                    systemPrompt: system,
+                    generationOptions: cloneGenerationOptions(options)
+                };
+            }
+            chatConfigurations = nextConfigurations;
 
             const candidateId = parsed.activeChatId;
             activeChatId = candidateId && chatHistory[candidateId] ? candidateId : '';
@@ -248,6 +366,7 @@
         chats = [summary, ...chats.filter((chat) => chat.id !== id)];
         activeChatId = id;
         messages = cloneMessagesFromStore(initialMessages);
+        applyChatConfig(id);
         saveChatState();
         return id;
     };
@@ -273,6 +392,7 @@
         input = '';
         error = null;
         isSending = false;
+        applyChatConfig(id);
         saveChatState();
     };
 
@@ -319,6 +439,7 @@
     let activeModelIndex = 0;
     let activeModelId: string | null = null;
     let modelPreviewState: ModelPreviewState = { models: [], index: 0, current: null };
+    const live2dDraftOriginals = new Map<string, ModelOption>();
 
     const setActiveIndex = (index: number) => {
         if (!live2dModels.length) {
@@ -419,6 +540,22 @@
         }
     };
 
+    const restoreDraftOriginals = () => {
+        if (!live2dDraftOriginals.size) return;
+        const nextModels = live2dModels.map((model) => {
+            const original = live2dDraftOriginals.get(model.id);
+            return original ?? model;
+        });
+        live2dDraftOriginals.clear();
+        live2dModels = nextModels;
+        if (activeModelId) {
+            const nextIndex = live2dModels.findIndex((model) => model.id === activeModelId);
+            if (nextIndex !== -1) {
+                setActiveIndex(nextIndex);
+            }
+        }
+    };
+
     const handleModelManagerCreated = async (event: CustomEvent<ModelOption>) => {
         const model = event.detail;
         activeModelId = model.id;
@@ -441,6 +578,41 @@
         await loadLive2DModels();
     };
 
+    const handleModelManagerDraft = (event: CustomEvent<ModelOption | null>) => {
+        const draft = event.detail;
+        if (!draft) {
+            restoreDraftOriginals();
+            return;
+        }
+
+        const index = live2dModels.findIndex((model) => model.id === draft.id);
+        if (index === -1) return;
+
+        if (!live2dDraftOriginals.has(draft.id)) {
+            live2dDraftOriginals.set(draft.id, live2dModels[index]);
+        }
+
+        const nextModel: ModelOption = {
+            ...live2dModels[index],
+            label: draft.label,
+            modelPath: draft.modelPath,
+            cubismCorePath: draft.cubismCorePath,
+            anchor: draft.anchor,
+            position: draft.position,
+            scaleMultiplier: draft.scaleMultiplier,
+            targetHeightRatio: draft.targetHeightRatio,
+            updatedAt: draft.updatedAt
+        };
+
+        live2dModels = live2dModels.map((model, modelIndex) =>
+            modelIndex === index ? nextModel : model
+        );
+
+        if (activeModelId === draft.id) {
+            setActiveIndex(index);
+        }
+    };
+
     const createInitialBotMessage = (): Message => ({
         id: createMessageId(),
         sender: 'bot',
@@ -455,6 +627,16 @@
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
     let isPromptSettingsOpen = false;
+
+    const updateSystemPrompt = (value: string) => {
+        systemPrompt = value;
+        persistActiveChatConfig();
+    };
+
+    const updateGenerationOptions = (value: LLMGenerationOptions) => {
+        generationOptions = cloneGenerationOptions(normalizeGenerationOptions(value));
+        persistActiveChatConfig();
+    };
 
     let expressionOptions: string[] = [];
     let selectedExpression = '';
@@ -494,16 +676,19 @@
                     providerExists && typeof serverSettings.model === 'string'
                         ? serverSettings.model
                         : '';
-                generationOptions = normalizeGenerationOptions(serverSettings.options);
+                const normalizedOptions = normalizeGenerationOptions(serverSettings.options);
+                applyBaseGenerationOptions(normalizedOptions);
             } else {
-                generationOptions = { ...defaultGenerationOptions };
+                applyBaseGenerationOptions({ ...defaultGenerationOptions });
             }
         } catch (err) {
             settingsLoadError =
                 err instanceof Error ? err.message : 'Unable to load provider settings';
             selectedProviderId = providers[0]?.id ?? defaultProvider.id;
             selectedModel = '';
-            generationOptions = { ...defaultGenerationOptions };
+            applyBaseGenerationOptions({ ...defaultGenerationOptions });
+        } finally {
+            saveChatState();
         }
     };
 
@@ -563,6 +748,7 @@
         try {
             const models = await listLive2DModels();
             live2dModels = models;
+            live2dDraftOriginals.clear();
 
             if (!models.length) {
                 setActiveIndex(0);
@@ -632,7 +818,7 @@
         selectedModel = '';
         settingsPersistError = null;
         latestPersistSignature = '';
-        generationOptions = { ...defaultGenerationOptions };
+        updateGenerationOptions({ ...defaultGenerationOptions });
         await ensureModels(provider);
     };
 
@@ -803,11 +989,13 @@
                     if (storedMessages && storedMessages.length) {
                         activeChatId = initialId;
                         messages = cloneMessagesFromStore(storedMessages);
+                        applyChatConfig(initialId);
                     } else {
                         const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
                         chatHistory = { ...chatHistory, [initialId]: initialMessages };
                         activeChatId = initialId;
                         messages = cloneMessagesFromStore(initialMessages);
+                        applyChatConfig(initialId);
                         saveChatState();
                     }
                 } else {
@@ -914,7 +1102,7 @@
     </button>
 {/snippet}
 
-<div class="flex min-h-screen flex-col bg-gradient-to-br from-surface-950 via-surface-950/95 to-surface-900 text-surface-50">
+<div class="flex h-screen min-h-0 flex-col overflow-hidden bg-gradient-to-br from-surface-950 via-surface-950/95 to-surface-900 text-surface-50">
     <AppBar
         lead={appBarLead}
         trail={appBarTrail}
@@ -970,8 +1158,8 @@
                                 void handleProviderChange(detail);
                             }}
                             on:modelChange={({ detail }) => (selectedModel = detail)}
-                            on:systemPromptChange={({ detail }) => (systemPrompt = detail)}
-                            on:optionsChange={({ detail }) => (generationOptions = detail)}
+                            on:systemPromptChange={({ detail }) => updateSystemPrompt(detail)}
+                            on:optionsChange={({ detail }) => updateGenerationOptions(detail)}
                         />
                                 <div class="flex flex-col gap-2 sm:flex-row xl:hidden">
                                     <button
@@ -1109,6 +1297,7 @@
     on:created={handleModelManagerCreated}
     on:updated={handleModelManagerUpdated}
     on:deleted={handleModelManagerDeleted}
+    on:draftChange={handleModelManagerDraft}
 />
 
 <PromptSettingsModal
@@ -1116,6 +1305,6 @@
     systemPrompt={systemPrompt}
     options={generationOptions}
     on:close={closePromptSettings}
-    on:systemPromptChange={({ detail }) => (systemPrompt = detail)}
-    on:optionsChange={({ detail }) => (generationOptions = detail)}
+    on:systemPromptChange={({ detail }) => updateSystemPrompt(detail)}
+    on:optionsChange={({ detail }) => updateGenerationOptions(detail)}
 />
