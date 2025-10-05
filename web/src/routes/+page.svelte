@@ -157,6 +157,9 @@
     const CHAT_STORAGE_KEY = 'stormhacks.chatState.v1';
 
     const normalizeVisibleText = (value: string): string => value.replace(/^\s*\n?/, '').trimEnd();
+    // Remove any inline textual tool-call notation like: live2d_react({ expression: "confused" })
+    const stripToolCallNotation = (value: string): string =>
+        value.replace(/(^|\n)\s*live2d_react\s*\([^)]*\)\s*(?=\n|$)/g, (m, p1) => (p1 ? p1 : ''));
     const stripThinkingTags = (value: string): string => value.replace(/<\/?think>/gi, '').trim();
 
     const themeOptions = availableThemes;
@@ -212,7 +215,7 @@
             cursor = closeIndex + closeTag.length;
         }
 
-        const text = normalizeVisibleText(visibleParts.join(''));
+        const text = normalizeVisibleText(stripToolCallNotation(visibleParts.join('')));
         return {
             text,
             thinking: thinkingBlocks[0] ?? null,
@@ -1562,7 +1565,8 @@ You are both an academic helper for SFU students *and* the gentle, bashful Huohu
 
                         const finalRaw = assistantMessage.raw ?? event.value ?? '';
                         const { text, thinkingBlocks, hasThinking } = extractMessageParts(finalRaw);
-                        const fallbackVisible = text || (hasThinking ? stripThinkingTags(finalRaw) : finalRaw).trim();
+                        const visibleRaw = hasThinking ? stripThinkingTags(finalRaw) : finalRaw;
+                        const fallbackVisible = (text || stripToolCallNotation(visibleRaw)).trim();
                         const overrideOpenStates = snapshotOpenStates(
                             messages.find((message) => message.id === assistantMessage.id)
                         );
@@ -2112,7 +2116,7 @@ You are both an academic helper for SFU students *and* the gentle, bashful Huohu
             return;
         }
 
-        const speakableText = stripThinkingTags(target.text ?? target.raw ?? '').trim();
+        const speakableText = stripToolCallNotation(stripThinkingTags(target.text ?? target.raw ?? '')).trim();
         if (!speakableText) {
             if (options?.notifyOnSkip) {
                 notifyApiError('Text-to-speech unavailable', 'This response has no speakable text.');
