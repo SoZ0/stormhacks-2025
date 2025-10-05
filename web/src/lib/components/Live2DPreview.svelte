@@ -257,8 +257,6 @@ export let loading = false;
 	let mouthParamErrorLogged = false;
 	let mouthFormErrorLogged = false;
 
-	let idleAutoplayDelayMs: number = DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
-	let idleTimer: number | null = null;
 	let layoutRetryHandle: number | null = null;
 	let layoutRetryCancel: ((id: number) => void) | null = null;
 
