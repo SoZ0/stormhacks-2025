@@ -320,7 +320,6 @@
     resetState();
   }
 
-  const listItems = () => displayModels;
   const modelBadge = (model: ModelOption) => (model.isCustom ? 'Custom' : 'Built-in');
   const displayPath = (path: string) => path.replace(/^\//, '');
 
@@ -427,12 +426,12 @@
                 {/if}
               </header>
               <div class="max-h-[340px] space-y-3 overflow-y-auto px-5 py-4">
-                {#if !loading && listItems().length === 0}
+                {#if !loading && displayModels.length === 0}
                   <div class="rounded-2xl border border-dashed border-surface-800/60 bg-surface-950/60 p-6 text-center text-sm text-surface-400">
                     Upload a Live2D zip to get started.
                   </div>
                 {:else}
-                  {#each listItems() as model, index (model.id ?? model.modelPath ?? index)}
+                  {#each displayModels as model, index (model.id ?? model.modelPath ?? index)}
                     <div
                       class={`flex flex-col gap-3 rounded-2xl border px-4 py-4 transition ${
                         model.id === activeModelId

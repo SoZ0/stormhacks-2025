@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { browser } from '$app/environment';
     import { resolve } from '$app/paths';
     import {
         fetchProviders,
@@ -46,6 +47,23 @@
         return Math.random().toString(36).slice(2);
     };
 
+    const createChatId = () => {
+        if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+            return crypto.randomUUID();
+        }
+        return `chat-${Math.random().toString(36).slice(2)}`;
+    };
+
+    interface ChatSummary {
+        id: string;
+        title: string;
+        createdAt: number;
+        updatedAt: number;
+    }
+
+    const DEFAULT_CHAT_TITLE = 'New Chat';
+    const CHAT_STORAGE_KEY = 'stormhacks.chatState.v1';
+
     const normalizeVisibleText = (value: string): string => value.replace(/^\s*\n?/, '').trimEnd();
     const stripThinkingTags = (value: string): string => value.replace(/<\/?think>/gi, '').trim();
 
@@ -74,6 +92,17 @@
         const visible = normalizeVisibleText(raw.slice(0, openIndex));
         return { text: visible, thinking: partialThinking || null, hasThinking: true };
     };
+
+    interface PersistedChatState {
+        activeChatId: string;
+        chats: ChatSummary[];
+        history: Record<string, Message[]>;
+    }
+
+    let chats: ChatSummary[] = [];
+    let chatHistory: Record<string, Message[]> = {};
+    let activeChatId = '';
+    let pendingChatIds: string[] = [];
 
     let live2dModels: ModelOption[] = [];
     let live2dModelsLoading = false;
