@@ -4,11 +4,15 @@ This repository contains the StormHacks 2025 client. The `web/` workspace holds 
 
 ## Built Using
 
-[![tags: tailwind](https://img.shields.io/badge/tag-tailwind-blue)]()
-[![tags: css](https://img.shields.io/badge/tag-css-blue)]()
-[![tags: html](https://img.shields.io/badge/tag-html-orange)]()
-[![tags: ts](https://img.shields.io/badge/tag-typescript-blueviolet)]()
-[![tags: js](https://img.shields.io/badge/tag-javascript-yellow)]()
+<p align="left">
+    <img alt="Tailwind CSS" src="https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white" />
+    <img alt="CSS3" src="https://img.shields.io/badge/CSS3-1572B6?style=for-the-badge&logo=css3&logoColor=white" />
+    <img alt="HTML5" src="https://img.shields.io/badge/HTML5-E34F26?style=for-the-badge&logo=html5&logoColor=white" />
+    <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
+    <img alt="JavaScript" src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" />
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" />
+    <img alt="Tauri" src="https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white" />
+</p>
 
 ## Directory layout
 - `web/` – SvelteKit app, build tooling, and the Tauri Rust crate
