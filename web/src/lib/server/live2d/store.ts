@@ -15,6 +15,7 @@ export interface Live2DModelSettings {
   position?: Live2DVectorConfig;
   scaleMultiplier?: number;
   targetHeightRatio?: number;
+  voiceId?: string | null;
 }
 
 export interface Live2DModelRecord extends Live2DModelSettings {
@@ -72,6 +73,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     position: { x: 0.5, y: 0.4 },
     scaleMultiplier: 1,
     targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO,
+    voiceId: null,
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
@@ -88,6 +90,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     position: { x: 0.5, y: 0.3 },
     scaleMultiplier: 0.85,
     targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO,
+    voiceId: null,
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
@@ -104,6 +107,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     position: { x: 0.5, y: 0.4 },
     scaleMultiplier: 1,
     targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO,
+    voiceId: null,
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
@@ -239,7 +243,11 @@ const normalizeSettings = (input: Live2DModelSettings | undefined): Live2DModelS
   targetHeightRatio:
     typeof input?.targetHeightRatio === 'number' && Number.isFinite(input.targetHeightRatio)
       ? input.targetHeightRatio
-      : DEFAULT_TARGET_HEIGHT_RATIO
+      : DEFAULT_TARGET_HEIGHT_RATIO,
+  voiceId:
+    typeof input?.voiceId === 'string' && input.voiceId.trim().length > 0
+      ? input.voiceId.trim()
+      : null
 });
 
 const mapStoredToRecord = (stored: StoredLive2DModel): Live2DModelRecord => {
@@ -256,6 +264,7 @@ const mapStoredToRecord = (stored: StoredLive2DModel): Live2DModelRecord => {
     position: settings.position,
     scaleMultiplier: settings.scaleMultiplier,
     targetHeightRatio: settings.targetHeightRatio,
+    voiceId: settings.voiceId ?? null,
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,
     isCustom: true,
@@ -314,7 +323,8 @@ export const createModel = async (input: CreateModelInput): Promise<Live2DModelR
     anchor: DEFAULT_ANCHOR,
     position: DEFAULT_POSITION,
     scaleMultiplier: DEFAULT_SCALE_MULTIPLIER,
-    targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO
+    targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO,
+    voiceId: null
   };
 
   const existing = await readDataFile();
@@ -373,6 +383,15 @@ export const updateModel = async (id: string, input: UpdateModelInput): Promise<
 
   if (typeof input.targetHeightRatio === 'number' && Number.isFinite(input.targetHeightRatio)) {
     updates.targetHeightRatio = input.targetHeightRatio;
+  }
+
+  if ('voiceId' in input) {
+    if (typeof input.voiceId === 'string') {
+      const trimmed = input.voiceId.trim();
+      updates.voiceId = trimmed.length > 0 ? trimmed : null;
+    } else if (input.voiceId === null) {
+      updates.voiceId = null;
+    }
   }
 
   if (typeof input.modelPath === 'string' && input.modelPath.trim()) {

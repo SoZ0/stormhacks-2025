@@ -947,27 +947,36 @@
         }
     };
 
+    const DEFAULT_TTS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
+
     async function speakText(text: string) {
-  const VOICE = 'JBFqnCBsd6RMkjVDRZzb';
-  try {
-    const res = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voiceId: VOICE })
-    });
-    if (!res.ok) {
-      const payload = await res.json().catch(() => null);
-      console.error('TTS error', res.status, payload);
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => URL.revokeObjectURL(url);
-    await audio.play();
-  } catch (e) {
-    console.error('speakText failed', e);
-  }
+        const configuredVoiceId = currentModel?.voiceId ?? DEFAULT_TTS_VOICE_ID;
+        const voiceId = configuredVoiceId?.trim();
+
+        if (!voiceId) {
+            console.warn('Skipping TTS: no voice configured');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voiceId })
+            });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => null);
+                console.error('TTS error', res.status, payload);
+                return;
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.onended = () => URL.revokeObjectURL(url);
+            await audio.play();
+        } catch (e) {
+            console.error('speakText failed', e);
+        }
     }
 
     onMount(() => {

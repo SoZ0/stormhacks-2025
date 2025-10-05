@@ -14,6 +14,7 @@
     updateLive2DModel,
     deleteLive2DModel
   } from '$lib/live2d/client';
+  import { listElevenLabsVoices, type ElevenLabsVoiceOption } from '$lib/tts/client';
 
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
   const toNumber = (value: string) => {
@@ -85,6 +86,7 @@
     label: string;
     modelPath: string;
     cubismCorePath: string;
+    voiceId: string;
     anchorX: string;
     anchorY: string;
     positionX: string;
@@ -102,6 +104,7 @@
     label: '',
     modelPath: '',
     cubismCorePath: '',
+    voiceId: '',
     anchorX: defaultAnchorX.toString(),
     anchorY: defaultAnchorY.toString(),
     positionX: defaultPositionX.toString(),
@@ -114,6 +117,7 @@
     label: model.label ?? '',
     modelPath: toRelativeModelPath(model, model.modelPath),
     cubismCorePath: model.cubismCorePath ?? '',
+    voiceId: model.voiceId ?? '',
     anchorX: stringify(model.anchor?.x, defaultAnchorX),
     anchorY: stringify(model.anchor?.y, defaultAnchorY),
     positionX: stringify(model.position?.x, defaultPositionX),
@@ -156,6 +160,11 @@
   let previewRef: Live2DPreviewHandle | null = null;
   let modelsSignature = '';
   let draftSignature = '';
+  let voiceOptions: ElevenLabsVoiceOption[] = [];
+  let voiceOptionsLoading = false;
+  let voiceOptionsError: string | null = null;
+  let voiceOptionsAttempted = false;
+  let displayVoiceOptions: ElevenLabsVoiceOption[] = [];
 
   const createDraftSignature = (model: ModelOption | null | undefined) => {
     if (!model) return '';
@@ -164,6 +173,7 @@
       label: model.label,
       modelPath: model.modelPath,
       cubismCorePath: model.cubismCorePath,
+      voiceId: model.voiceId,
       anchor: model.anchor,
       position: model.position,
       scaleMultiplier: model.scaleMultiplier,
@@ -194,7 +204,33 @@
     selectedPreviewExpression = '';
     previewRef = null;
     draftSignature = '';
+    voiceOptionsLoading = false;
+    voiceOptionsAttempted = false;
+    voiceOptionsError = null;
     emitDraftChange(null, true);
+  };
+
+  const loadVoiceOptions = async (force = false) => {
+    if (voiceOptionsLoading) return;
+    if (!force && voiceOptionsAttempted) return;
+
+    voiceOptionsAttempted = true;
+    voiceOptionsLoading = true;
+    voiceOptionsError = null;
+
+    try {
+      voiceOptions = await listElevenLabsVoices();
+    } catch (err) {
+      voiceOptions = [];
+      voiceOptionsError = err instanceof Error ? err.message : 'Unable to load ElevenLabs voices';
+    } finally {
+      voiceOptionsLoading = false;
+    }
+  };
+
+  const retryVoiceOptions = async () => {
+    if (voiceOptionsLoading) return;
+    await loadVoiceOptions(true);
   };
 
   const closeModal = () => {
@@ -291,6 +327,7 @@
       0.1,
       2
     );
+    const trimmedVoiceId = editForm.voiceId?.trim() ?? '';
 
     const payload: Live2DModelUpdateInput = {
       label,
@@ -298,7 +335,8 @@
       anchor: { x: anchorX, y: anchorY },
       position: { x: positionX, y: positionY },
       scaleMultiplier,
-      targetHeightRatio
+      targetHeightRatio,
+      voiceId: trimmedVoiceId.length > 0 ? trimmedVoiceId : null
     };
 
     if (selectedPath?.trim()) {
@@ -375,11 +413,13 @@
 
     const absolutePath = modelPath ?? editingModel.modelPath ?? editingModel.availableModelFiles?.[0];
     const cubismCore = editForm.cubismCorePath.trim() || editingModel.cubismCorePath;
+    const trimmedVoiceId = editForm.voiceId?.trim() ?? '';
     const nextDraft: ModelOption = {
       ...editingModel,
       label: editForm.label.trim() || editingModel.label,
       modelPath: absolutePath ?? editingModel.modelPath,
       cubismCorePath: cubismCore,
+      voiceId: trimmedVoiceId.length > 0 ? trimmedVoiceId : null,
       anchor: { x: anchorX, y: anchorY },
       position: { x: positionX, y: positionY },
       scaleMultiplier: scaleMultiplierValue,
@@ -417,6 +457,19 @@
     isSaving = false;
     deletingId = null;
     resetState();
+  }
+
+  $: if (open) {
+    loadVoiceOptions();
+  }
+
+  $: {
+    const trimmedVoiceId = editForm.voiceId?.trim() ?? '';
+    if (trimmedVoiceId && !voiceOptions.some((item) => item.id === trimmedVoiceId)) {
+      displayVoiceOptions = [...voiceOptions, { id: trimmedVoiceId, name: `${trimmedVoiceId} (missing)` }];
+    } else {
+      displayVoiceOptions = [...voiceOptions];
+    }
   }
 
   const modelBadge = (model: ModelOption) => (model.isCustom ? 'Custom' : 'Built-in');
@@ -661,6 +714,50 @@
                     bind:value={editForm.cubismCorePath}
                     placeholder="/vendor/live2d/live2dcubismcore.min.js"
                   />
+                </label>
+
+                <label class="flex flex-col gap-2 text-sm text-surface-200">
+                  <span class="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.2em] text-surface-400">
+                    <span>ElevenLabs voice</span>
+                    <button
+                      type="button"
+                      class="rounded-lg border border-surface-700/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-surface-300 transition hover:border-surface-600/70 hover:text-surface-100 disabled:opacity-50"
+                      on:click={() => loadVoiceOptions(true)}
+                      disabled={voiceOptionsLoading}
+                    >
+                      Refresh
+                    </button>
+                  </span>
+                  {#if voiceOptionsLoading}
+                    <div class="flex items-center gap-2 rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-xs text-surface-300">
+                      <span class="h-3 w-3 animate-spin rounded-full border border-surface-500/40 border-t-transparent"></span>
+                      Loading voices…
+                    </div>
+                  {:else}
+                    <select
+                      class="rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-sm text-surface-100 focus:border-primary-500 focus:outline-none disabled:opacity-60"
+                      bind:value={editForm.voiceId}
+                      disabled={voiceOptionsLoading}
+                    >
+                      <option value="">Default voice</option>
+                      {#each displayVoiceOptions as voice}
+                        <option value={voice.id}>{voice.name}</option>
+                      {/each}
+                    </select>
+                  {/if}
+                  {#if voiceOptionsError}
+                    <div class="flex items-center gap-2 text-xs text-error-200">
+                      <span class="truncate">{voiceOptionsError}</span>
+                      <button
+                        type="button"
+                        class="rounded-lg border border-error-500/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-error-100 hover:border-error-500/60 disabled:opacity-50"
+                        on:click={retryVoiceOptions}
+                        disabled={voiceOptionsLoading}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  {/if}
                 </label>
 
                 <div class="grid gap-3 md:grid-cols-2">

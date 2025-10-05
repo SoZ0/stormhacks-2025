@@ -9,6 +9,7 @@ export interface Live2DModelConfig {
   position?: Live2DVectorConfig;
   scaleMultiplier?: number;
   targetHeightRatio?: number;
+  voiceId?: string | null;
 }
 
 export interface Live2DModelDefinition extends Live2DModelConfig {
