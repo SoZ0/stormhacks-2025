@@ -216,6 +216,7 @@
     previewExpressions = [];
     selectedPreviewExpression = '';
     previewRef = null;
+    previewLoading = false;
     draftSignature = '';
     voiceOptionsLoading = false;
     voiceOptionsAttempted = false;
@@ -521,7 +522,7 @@
       on:click={closeModal}
       aria-label="Dismiss Live2D model manager"
     ></button>
-    <div class="relative z-10 mx-auto w-full max-w-7xl">
+    <div class="relative z-10 mx-auto w-5/6">
       <div class="flex h-full flex-col rounded-3xl border border-surface-800/50 bg-surface-950/95 shadow-2xl shadow-surface-950/40">
         <header class="flex items-start justify-between gap-4 border-b border-surface-800/60 px-6 py-5">
           <div class="flex flex-col gap-1">
@@ -696,13 +697,7 @@
                   <h3 class="text-sm font-semibold text-surface-100">Configure {editingModel.label}</h3>
                   <p class="text-xs text-surface-400">Adjust how the model is positioned inside the preview canvas.</p>
                 </div>
-                <button
-                  type="button"
-                  class="btn btn-xs border border-surface-700/60 bg-surface-900/70 text-xs font-semibold text-surface-200"
-                  on:click={() => editingModel && startEditing(editingModel)}
-                >
-                  Reset
-                </button>
+          
               </div>
               <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
                 <form class="flex flex-col gap-4" on:submit|preventDefault={saveChanges}>
@@ -884,7 +879,7 @@
                 </div>
               </form>
               <div class="relative mx-auto w-full max-w-xl overflow-hidden rounded-2xl border border-surface-800/60 bg-surface-900/50 lg:mx-0 lg:max-w-[640px]">
-                <div class="aspect-[16/9] w-full min-h-[300px]">
+                <div class="aspect-[16/9] w-full h-full">
                   <Live2DPreview
                     config={previewConfig}
                     bind:loading={previewLoading}

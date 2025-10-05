@@ -1206,18 +1206,10 @@
                     </section>
 
                     <aside class="hidden min-h-[420px] xl:block xl:w-[420px] xl:flex-none 2xl:w-[480px]">
-                        <ModelPreviewPanel
-                            state={modelPreviewState}
-                            bind:expressionOptions
-                            bind:selectedExpression
-                            on:prev={prevModel}
-                            on:next={nextModel}
-                            on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
-                        />
-                        <div class="mt-4 flex flex-col gap-2">
+                         <div class="mb-4 flex flex-col gap-2">
                             <button
                                 type="button"
-                                class="btn btn-base border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                class="btn btn-base border border-blue-800/60 bg-blue-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
                                 on:click={openModelManager}
                             >
                                 Manage Models
@@ -1228,6 +1220,15 @@
                                 </p>
                             {/if}
                         </div>
+                        <ModelPreviewPanel
+                            state={modelPreviewState}
+                            bind:expressionOptions
+                            bind:selectedExpression
+                            on:prev={prevModel}
+                            on:next={nextModel}
+                            on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
+                        />
+                       
                     </aside>
                 </div>
             </div>

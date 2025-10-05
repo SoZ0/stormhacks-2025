@@ -325,6 +325,12 @@ export let loading = false;
 	};
 
 	$: {
+		if (model && !inFlightModelConfig) {
+			loading = false;
+		}
+	}
+
+	$: {
 		if (app && container && canvas) {
 			const desiredConfig: ModelConfig = {
 				modelUrl: resolvedModelUrl,
