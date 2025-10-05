@@ -1205,8 +1205,8 @@
                         </div>
                     </section>
 
-                    <aside class="xl:block xl:w-[420px] 2xl:w-[480px] h-full min-h-0 flex flex-col">
-                        <div class="mb-4 flex shrink-0 flex-col gap-2">
+                    <aside class="xl:block xl:w-[420px] 2xl:w-[480px] h-full flex flex-col">
+                         <div class="flex flex-col gap-2 mb-4">
                             <button
                                 type="button"
                                 class="btn btn-base border border-blue-800/60 bg-blue-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
@@ -1220,16 +1220,15 @@
                                 </p>
                             {/if}
                         </div>
-                        <div class="flex-1 min-h-0 overflow-hidden">
-                            <ModelPreviewPanel
-                                state={modelPreviewState}
-                                bind:expressionOptions
-                                bind:selectedExpression
-                                on:prev={prevModel}
-                                on:next={nextModel}
-                                on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
-                            />
-                        </div>
+                        <ModelPreviewPanel
+                            state={modelPreviewState}
+                            bind:expressionOptions
+                            bind:selectedExpression
+                            on:prev={prevModel}
+                            on:next={nextModel}
+                            on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
+                        />
+                       
                     </aside>
                 </div>
             </div>

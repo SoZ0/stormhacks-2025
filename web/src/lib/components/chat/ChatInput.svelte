@@ -26,10 +26,10 @@
 
 </script>
 
-<div class="flex items-end gap-3 rounded-2xl border border-surface-800/60 bg-surface-950/60 px-4 py-4 shadow-lg shadow-surface-950/20">
+<div class="flex items-center gap-3 rounded-2xl border border-surface-800/60 bg-surface-950/60 px-4 py-4 shadow-lg shadow-surface-950/20 ">
 	<button
 		type="button"
-		class="btn btn-icon btn-icon-base border border-surface-800/60 bg-surface-950/60 text-lg text-surface-300 transition hover:text-surface-50"
+		class="btn btn-icon btn-icon-lg border border-primary-500 bg-primary-500 text-xl text-[color:var(--color-primary-contrast-500)]  transition hover:text-surface-50"
 		on:click={emitOpenSettings}
 		aria-label="Open prompt settings"
 	>
