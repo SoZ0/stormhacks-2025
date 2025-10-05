@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { sanitizeElevenLabsApiKey } from '$lib/llm/settings';
-import { getStoredSettings, updateStoredSettings } from '$lib/server/settingsStore';
+import { getStoredSettings, updateStoredSettings } from '$lib/shared/settingsStore';
 
 const toResponse = (hasKey: boolean) => json({ settings: { hasElevenLabsApiKey: hasKey } });
 

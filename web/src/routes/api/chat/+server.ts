@@ -1,12 +1,13 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { handleChatRequest, HttpError } from '$lib/api/chat';
+import type { ChatRequestBody } from '$lib/api/chat';
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
-  let payload: unknown;
+  let payload: ChatRequestBody;
 
   try {
-    payload = await request.json();
+    payload = (await request.json()) as ChatRequestBody;
   } catch {
     return json({ error: 'Invalid JSON body' }, { status: 400 });
   }

@@ -1,8 +1,7 @@
-import { randomUUID } from 'crypto';
 import type { Cookies } from '@sveltejs/kit';
-import { findProvider } from '$lib/server/providerStore';
-import { streamProviderChat, type ProviderAttachment, type ProviderMessage } from '$lib/server/llm';
 import { normalizeGenerationOptions } from '$lib/llm/settings';
+import { findProvider } from '$lib/shared/providerStore';
+import { streamProviderChat, type ProviderAttachment, type ProviderMessage } from '$lib/shared/llm';
 
 export class HttpError extends Error {
   status: number;
@@ -33,6 +32,23 @@ const MAX_ATTACHMENTS_PER_MESSAGE = 6;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const DATA_URL_PATTERN = /^data:([^;\s]+);base64,([A-Za-z0-9+/=\s]+)$/;
 
+const generateId = (): string => {
+  const cryptoObj = typeof globalThis !== 'undefined' ? (globalThis as { crypto?: Crypto }).crypto : undefined;
+  if (cryptoObj?.randomUUID) {
+    return cryptoObj.randomUUID();
+  }
+
+  if (cryptoObj?.getRandomValues) {
+    const bytes = new Uint32Array(4);
+    cryptoObj.getRandomValues(bytes);
+    return Array.from(bytes)
+      .map((value) => value.toString(16).padStart(8, '0'))
+      .join('');
+  }
+
+  return `attachment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+
 const sanitizeBase64 = (value: string): string => value.replace(/\s+/g, '');
 
 const toClientAttachment = (value: unknown): ClientAttachment | null => {
@@ -55,7 +71,7 @@ const toClientAttachment = (value: unknown): ClientAttachment | null => {
     return null;
   }
 
-  const id = typeof source.id === 'string' && source.id.trim() ? source.id.trim() : randomUUID();
+  const id = typeof source.id === 'string' && source.id.trim() ? source.id.trim() : generateId();
   const name = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : 'attachment';
   const sizeValue =
     typeof source.size === 'number'
@@ -123,24 +139,41 @@ const parseAttachmentDataUrl = (attachment: ClientAttachment): ParsedAttachment 
     return null;
   }
 
-  try {
-    const buffer = Buffer.from(base64, 'base64');
-    if (!buffer.length) {
-      return null;
+  const decodeSize = (): number => {
+    if (typeof Buffer !== 'undefined') {
+      try {
+        return Buffer.from(base64, 'base64').byteLength;
+      } catch {
+        return 0;
+      }
     }
 
-    if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
-      return null;
+    if (typeof atob === 'function') {
+      try {
+        const binary = atob(base64);
+        return binary.length;
+      } catch {
+        return 0;
+      }
     }
 
-    return {
-      mimeType: normalizedMime,
-      data: base64,
-      size: buffer.byteLength
-    };
-  } catch {
+    return 0;
+  };
+
+  const byteLength = decodeSize();
+  if (!byteLength) {
     return null;
   }
+
+  if (byteLength > MAX_ATTACHMENT_BYTES) {
+    return null;
+  }
+
+  return {
+    mimeType: normalizedMime,
+    data: base64,
+    size: byteLength
+  };
 };
 
 const toProviderAttachments = (attachments: ClientAttachment[]): ProviderAttachment[] | null => {
@@ -193,7 +226,7 @@ const normalizeClientTimestamp = (value: unknown): string | null => {
   return null;
 };
 
-interface ChatRequestBody {
+export interface ChatRequestBody {
   provider: string;
   model: string;
   messages: unknown;

@@ -42,9 +42,7 @@ const createStorage = (): StorageAdapter => {
   };
 };
 
-interface CookieSerializeOptions {
-  path: string;
-}
+type SerializeOptions = CookieSerializeOptions & { path: string };
 
 class LocalCookieJar implements Cookies {
   private readonly storage: StorageAdapter;
@@ -67,15 +65,15 @@ class LocalCookieJar implements Cookies {
       .filter((entry): entry is { name: string; value: string } => Boolean(entry));
   }
 
-  set(name: string, value: string, _opts: CookieSerializeOptions) {
+  set(name: string, value: string, _opts: SerializeOptions) {
     this.storage.set(name, value);
   }
 
-  delete(name: string, _opts: CookieSerializeOptions) {
+  delete(name: string, _opts: SerializeOptions) {
     this.storage.remove(name);
   }
 
-  serialize(name: string, value: string, _opts: CookieSerializeOptions) {
+  serialize(name: string, value: string, _opts: SerializeOptions) {
     this.storage.set(name, value);
     return `${name}=${encodeURIComponent(value)}; path=/`;
   }

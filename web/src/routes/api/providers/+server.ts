@@ -7,7 +7,7 @@ import {
   maskProvidersForClient,
   saveProviders,
   type CreateProviderInput
-} from '$lib/server/providerStore';
+} from '$lib/shared/providerStore';
 
 export const GET: RequestHandler = ({ cookies }) => {
   const providers = maskProvidersForClient(getProviders(cookies));

@@ -1,6 +1,6 @@
-import type { ToolExecutor, ToolFunctionDefinition } from '$lib/server/tools/types';
-import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
-import { WEB_BROWSING_TOOLS, executeWebBrowsingTool } from '$lib/server/tools/webBrowsing';
+import type { ToolExecutor, ToolFunctionDefinition } from '$lib/shared/tools/types';
+import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/shared/tools/sfuOutlines';
+import { WEB_BROWSING_TOOLS, executeWebBrowsingTool } from '$lib/shared/tools/webBrowsing';
 
 const definitionList: ToolFunctionDefinition[] = [];
 const executorMap = new Map<string, ToolExecutor>();

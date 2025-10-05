@@ -2,7 +2,7 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
-import { getStoredSettings } from '$lib/server/settingsStore';
+import { getStoredSettings } from '$lib/shared/settingsStore';
 
 const DEFAULT_ELEVENLABS_VOICES: Array<{ id: string; name: string }> = [
   { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel' },

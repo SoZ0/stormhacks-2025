@@ -673,6 +673,7 @@ export let loading = false;
 	}
 
 	let loadToken = 0;
+	let idleTimer: number | null = null;
 
 	const clearIdleTimer = () => {
 		if (idleTimer != null) {

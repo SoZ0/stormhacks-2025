@@ -8,7 +8,7 @@ import {
   type ValueOption,
   type YearOption
 } from '$lib/sfu/outlines/client';
-import type { ToolFunctionDefinition } from '$lib/server/tools/types';
+import type { ToolFunctionDefinition } from '$lib/shared/tools/types';
 
 const outlinesClient = createOutlinesClient();
 
@@ -404,6 +404,17 @@ export const SFU_OUTLINES_TOOLS: ToolFunctionDefinition[] = [
     }
   }
 ];
+
+interface GlobalSfuToolRegistry {
+  SFU_OUTLINES_TOOLS?: ToolFunctionDefinition[];
+}
+
+if (typeof globalThis !== 'undefined') {
+  const globalScope = globalThis as GlobalSfuToolRegistry;
+  if (!Array.isArray(globalScope.SFU_OUTLINES_TOOLS)) {
+    globalScope.SFU_OUTLINES_TOOLS = SFU_OUTLINES_TOOLS;
+  }
+}
 
 export const executeSfuOutlinesTool = async (name: string, rawArgs: unknown) => {
   const handler = handlers[name];

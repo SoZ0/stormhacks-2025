@@ -1,6 +1,6 @@
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
-import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
+import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/shared/tools';
 
 export interface ProviderAttachment {
   id: string;

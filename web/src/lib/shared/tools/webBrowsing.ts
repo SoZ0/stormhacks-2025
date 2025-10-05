@@ -1,5 +1,5 @@
 import sanitizeHtml from 'sanitize-html';
-import type { ToolFunctionDefinition } from '$lib/server/tools/types';
+import type { ToolFunctionDefinition } from '$lib/shared/tools/types';
 
 const DEFAULT_MAX_CHARACTERS = 6000;
 const ABSOLUTE_MAX_CHARACTERS = 12000;

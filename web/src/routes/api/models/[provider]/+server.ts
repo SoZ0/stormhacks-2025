@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { findProvider } from '$lib/server/providerStore';
-import { listProviderModels } from '$lib/server/llm';
+import { findProvider } from '$lib/shared/providerStore';
+import { listProviderModels } from '$lib/shared/llm';
 
 export const GET: RequestHandler = async ({ params, cookies }) => {
   const providerId = params.provider;

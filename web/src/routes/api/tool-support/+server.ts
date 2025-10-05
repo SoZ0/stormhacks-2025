@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { findProvider } from '$lib/server/providerStore';
-import { checkProviderToolSupport } from '$lib/server/llm';
+import { findProvider } from '$lib/shared/providerStore';
+import { checkProviderToolSupport } from '$lib/shared/llm';
 
 interface ToolSupportRequestBody {
   provider?: unknown;

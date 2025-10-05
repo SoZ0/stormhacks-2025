@@ -4,7 +4,7 @@ import {
   maskProviderForClient,
   maskProvidersForClient,
   removeProvider
-} from '$lib/server/providerStore';
+} from '$lib/shared/providerStore';
 
 export const DELETE: RequestHandler = ({ params, cookies }) => {
   const providerId = params.provider;

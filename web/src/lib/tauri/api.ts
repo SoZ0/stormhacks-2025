@@ -8,15 +8,15 @@ import {
   maskProvidersForClient,
   removeProvider,
   saveProviders
-} from '$lib/server/providerStore';
+} from '$lib/shared/providerStore';
 import {
   createDefaultSettings,
   getClientSettings,
   getStoredSettings,
   saveStoredSettings,
   updateStoredSettings
-} from '$lib/server/settingsStore';
-import { listProviderModels, checkProviderToolSupport } from '$lib/server/llm';
+} from '$lib/shared/settingsStore';
+import { listProviderModels, checkProviderToolSupport } from '$lib/shared/llm';
 import { normalizeGenerationOptions, sanitizeElevenLabsApiKey } from '$lib/llm/settings';
 import { getLocalCookieJar } from '$lib/tauri/cookies';
 

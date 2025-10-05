@@ -1,7 +1,7 @@
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
-import { getStoredSettings } from '$lib/server/settingsStore';
+import { getStoredSettings } from '$lib/shared/settingsStore';
 import { Readable } from 'node:stream';
 
 const textEncoder = new TextEncoder();

@@ -1,14 +1,14 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { normalizeGenerationOptions, type LLMSettings } from '$lib/llm/settings';
-import { findProvider, getProviders } from '$lib/server/providerStore';
+import { findProvider, getProviders } from '$lib/shared/providerStore';
 import {
   createDefaultSettings,
   getClientSettings,
   getStoredSettings,
   saveStoredSettings,
   updateStoredSettings
-} from '$lib/server/settingsStore';
+} from '$lib/shared/settingsStore';
 
 export const GET: RequestHandler = async ({ cookies }) => {
   const providers = getProviders(cookies);
