@@ -103,14 +103,22 @@ export const streamProviderChat = async (
   options: LLMGenerationOptions,
   enableTools = true
 ): Promise<ReadableStream<Uint8Array>> => {
-  const shouldUseTools = enableTools && provider.kind === 'ollama';
+  const shouldUseTools =
+    enableTools && (provider.kind === 'ollama' || provider.kind === 'gemini');
   const normalizedHistory = shouldUseTools ? prependToolInstruction(history) : history;
 
   switch (provider.kind) {
     case 'ollama':
       return streamOllamaChat(provider, model, normalizedHistory, options, shouldUseTools);
     case 'gemini':
-      return streamGeminiChat(provider, model, history, systemPrompt, options);
+      return streamGeminiChat(
+        provider,
+        model,
+        normalizedHistory,
+        systemPrompt,
+        options,
+        shouldUseTools
+      );
     default:
       throw new Error(`Unsupported provider: ${provider.kind}`);
   }
@@ -195,7 +203,7 @@ export const checkProviderToolSupport = async (
     case 'ollama':
       return checkOllamaToolSupport(provider, model);
     case 'gemini':
-      return false;
+      return checkGeminiToolSupport(provider, model);
     default:
       return false;
   }
@@ -607,36 +615,59 @@ const listGeminiModels = async (provider: ProviderConfig): Promise<string[]> => 
   return uniqueSorted(models);
 };
 
-const chatWithGemini = async (
-  provider: ProviderConfig,
-  model: string,
-  history: ProviderMessage[],
-  systemPrompt: string | undefined,
-  options: LLMGenerationOptions
-): Promise<string> => {
-  const apiKey = resolveGeminiApiKey(provider);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+type GeminiRole = 'user' | 'model' | 'function';
 
-  const dialogue = history.filter((entry) => entry.role !== 'system');
-  const systemMessages = history
-    .filter((entry) => entry.role === 'system')
-    .map((entry) => entry.content?.trim())
-    .filter((value): value is string => Boolean(value && value.length));
+interface GeminiFunctionCallPart {
+  name?: string;
+  args?: unknown;
+}
 
-  if (systemPrompt && systemPrompt.trim()) {
-    const trimmed = systemPrompt.trim();
-    if (!systemMessages.some((message) => message === trimmed)) {
-      systemMessages.push(trimmed);
-    }
+interface GeminiFunctionResponsePart {
+  name?: string;
+  response?: unknown;
+}
+
+interface GeminiPart {
+  text?: string;
+  functionCall?: GeminiFunctionCallPart;
+  functionResponse?: GeminiFunctionResponsePart;
+}
+
+interface GeminiContent {
+  role?: string;
+  parts?: GeminiPart[];
+}
+
+interface GeminiCandidate {
+  content?: GeminiContent;
+}
+
+interface GeminiPromptFeedback {
+  blockReason?: string;
+}
+
+interface GeminiGenerateContentResponse {
+  candidates?: GeminiCandidate[];
+  promptFeedback?: GeminiPromptFeedback;
+  error?: { message?: string };
+}
+
+const ensureGeminiRole = (role: unknown, fallback: GeminiRole = 'model'): GeminiRole => {
+  if (role === 'user' || role === 'model' || role === 'function') {
+    return role;
   }
+  return fallback;
+};
 
-  const contents = dialogue.map((entry) => ({
-    role: entry.role === 'user' ? 'user' : 'model',
-    parts: [{ text: entry.content }]
-  }));
+const mapHistoryToGeminiContents = (history: ProviderMessage[]): GeminiContent[] =>
+  history
+    .filter((entry) => entry.role !== 'system')
+    .map((entry) => ({
+      role: entry.role === 'user' ? 'user' : 'model',
+      parts: [{ text: entry.content }]
+    }));
 
-  const body: Record<string, unknown> = { contents };
-
+const buildGeminiGenerationConfig = (options: LLMGenerationOptions): Record<string, number> => {
   const generationConfig: Record<string, number> = {};
   if (typeof options.temperature === 'number') {
     generationConfig.temperature = options.temperature;
@@ -650,42 +681,302 @@ const chatWithGemini = async (
   if (typeof options.maxOutputTokens === 'number') {
     generationConfig.maxOutputTokens = options.maxOutputTokens;
   }
+  return generationConfig;
+};
 
-  if (Object.keys(generationConfig).length > 0) {
-    body.generationConfig = generationConfig;
-  }
+const buildGeminiSystemInstruction = (messages: string[]) =>
+  messages.length
+    ? {
+        role: 'system',
+        parts: messages.map((text) => ({ text }))
+      }
+    : undefined;
 
-  if (systemMessages.length) {
-    body.systemInstruction = {
-      role: 'system',
-      parts: systemMessages.map((text) => ({ text }))
-    };
+const buildGeminiToolsPayload = () => [
+  {
+    functionDeclarations: SFU_OUTLINES_TOOLS.map((tool) => ({
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters
+    }))
   }
+];
+
+const GEMINI_TOOL_UNSUPPORTED_PATTERNS = [
+  'tools are not supported',
+  'tool use is not supported',
+  'function calling is not supported',
+  "function calling isn't supported",
+  'does not support tools',
+  'does not support function',
+  'functioncall is not available'
+];
+
+const geminiMessageIndicatesUnsupported = (value: unknown): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  return GEMINI_TOOL_UNSUPPORTED_PATTERNS.some((pattern) => lower.includes(pattern));
+};
+
+const checkGeminiToolSupport = async (
+  provider: ProviderConfig,
+  model: string
+): Promise<boolean> => {
+  const apiKey = resolveGeminiApiKey(provider);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const requestBody = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: 'Tool support probe.' }]
+      }
+    ],
+    tools: buildGeminiToolsPayload(),
+    generationConfig: {
+      temperature: 0
+    }
+  };
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(requestBody)
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    const message = data?.error?.message ?? 'Unknown Gemini error';
-    throw new Error(`Gemini request failed (${response.status}): ${message}`);
+  const raw = await response.text();
+
+  if (response.ok) {
+    return true;
   }
 
-  const reply = data?.candidates?.[0]?.content?.parts
-    ?.map((part: { text?: string }) => part.text ?? '')
+  let parsed: GeminiGenerateContentResponse | null = null;
+  try {
+    parsed = raw ? (JSON.parse(raw) as GeminiGenerateContentResponse) : null;
+  } catch {
+    parsed = null;
+  }
+
+  const message = parsed?.error?.message ?? raw ?? '';
+  if (geminiMessageIndicatesUnsupported(message)) {
+    return false;
+  }
+
+  const finalMessage = message.trim() ? message.trim() : 'Unknown Gemini error';
+  throw new Error(`Gemini tool support check failed (${response.status}): ${finalMessage}`);
+};
+
+const normalizeGeminiContent = (content: GeminiContent | null | undefined): GeminiContent => ({
+  role: ensureGeminiRole(content?.role, 'model'),
+  parts: Array.isArray(content?.parts) ? [...content.parts] : []
+});
+
+const extractGeminiText = (content: GeminiContent): string => {
+  const parts = Array.isArray(content.parts) ? content.parts : [];
+  return parts
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
     .filter(Boolean)
     .join('\n');
+};
 
-  if (!reply) {
-    throw new Error('Gemini response missing assistant reply');
+interface GeminiToolCall {
+  name: string;
+  args: unknown;
+}
+
+const extractGeminiToolCalls = (content: GeminiContent): GeminiToolCall[] => {
+  const parts = Array.isArray(content.parts) ? content.parts : [];
+  const calls: GeminiToolCall[] = [];
+
+  for (const part of parts) {
+    const call = part?.functionCall;
+    if (call && typeof call.name === 'string') {
+      calls.push({ name: call.name, args: call.args });
+    }
   }
 
-  return reply;
+  return calls;
+};
+
+const createGeminiToolResponseContent = async (
+  toolName: string,
+  rawArgs: unknown
+): Promise<GeminiContent> => {
+  const normalized = toolName.trim();
+  if (!normalized) {
+    return {
+      role: 'function',
+      parts: [
+        {
+          functionResponse: {
+            name: 'unknown_tool',
+            response: {
+              ok: false,
+              tool: 'unknown_tool',
+              error: 'Tool call missing function name.'
+            }
+          }
+        }
+      ]
+    };
+  }
+
+  try {
+    const data = await executeSfuOutlinesTool(normalized, rawArgs);
+    return {
+      role: 'function',
+      parts: [
+        {
+          functionResponse: {
+            name: normalized,
+            response: {
+              ok: true,
+              tool: normalized,
+              data
+            }
+          }
+        }
+      ]
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown tool execution error';
+    return {
+      role: 'function',
+      parts: [
+        {
+          functionResponse: {
+            name: normalized,
+            response: {
+              ok: false,
+              tool: normalized,
+              error: message
+            }
+          }
+        }
+      ]
+    };
+  }
+};
+
+const pickGeminiCandidateContent = (
+  data: GeminiGenerateContentResponse
+): GeminiContent | null => {
+  if (!Array.isArray(data?.candidates)) {
+    return null;
+  }
+
+  for (const candidate of data.candidates) {
+    if (candidate?.content && Array.isArray(candidate.content.parts)) {
+      return candidate.content;
+    }
+  }
+
+  return data.candidates[0]?.content ?? null;
+};
+
+const GEMINI_MAX_TOOL_ITERATIONS = 6;
+
+const chatWithGemini = async (
+  provider: ProviderConfig,
+  model: string,
+  history: ProviderMessage[],
+  systemPrompt: string | undefined,
+  options: LLMGenerationOptions,
+  enableTools: boolean
+): Promise<string> => {
+  const apiKey = resolveGeminiApiKey(provider);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const systemMessages = history
+    .filter((entry) => entry.role === 'system')
+    .map((entry) => entry.content?.trim())
+    .filter((value): value is string => Boolean(value && value.length));
+
+  if (systemPrompt && systemPrompt.trim()) {
+    const trimmed = systemPrompt.trim();
+    if (!systemMessages.includes(trimmed)) {
+      systemMessages.push(trimmed);
+    }
+  }
+
+  const conversation = mapHistoryToGeminiContents(history);
+  const generationConfig = buildGeminiGenerationConfig(options);
+
+  const baseRequest: Record<string, unknown> & { contents: GeminiContent[] } = {
+    contents: conversation
+  };
+
+  if (Object.keys(generationConfig).length > 0) {
+    baseRequest.generationConfig = generationConfig;
+  }
+
+  const systemInstruction = buildGeminiSystemInstruction(systemMessages);
+  if (systemInstruction) {
+    baseRequest.systemInstruction = systemInstruction;
+  }
+
+  if (enableTools) {
+    baseRequest.tools = buildGeminiToolsPayload();
+  }
+
+  const maxIterations = enableTools ? GEMINI_MAX_TOOL_ITERATIONS : 1;
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const requestBody = { ...baseRequest, contents: conversation };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      const message = data?.error?.message ?? 'Unknown Gemini error';
+      throw new Error(`Gemini request failed (${response.status}): ${message}`);
+    }
+
+    const candidateContent = pickGeminiCandidateContent(data);
+    if (!candidateContent) {
+      const blockReason = data?.promptFeedback?.blockReason ?? '';
+      const message = blockReason
+        ? `Gemini response blocked: ${blockReason}`
+        : 'Gemini response missing assistant reply';
+      throw new Error(message);
+    }
+
+    const normalizedContent = normalizeGeminiContent(candidateContent);
+    conversation.push(normalizedContent);
+
+    if (enableTools) {
+      const toolCalls = extractGeminiToolCalls(normalizedContent);
+
+      if (toolCalls.length > 0) {
+        for (const call of toolCalls) {
+          const toolResponseContent = await createGeminiToolResponseContent(call.name, call.args);
+          conversation.push(toolResponseContent);
+        }
+        continue;
+      }
+    }
+
+    const reply = extractGeminiText(normalizedContent).trim();
+    if (reply) {
+      return reply;
+    }
+  }
+
+  if (enableTools) {
+    throw new Error('Tool execution exceeded maximum allowed iterations.');
+  }
+
+  throw new Error('Gemini response missing assistant reply');
 };
 
 const streamGeminiChat = async (
@@ -693,18 +984,31 @@ const streamGeminiChat = async (
   model: string,
   history: ProviderMessage[],
   systemPrompt: string | undefined,
-  options: LLMGenerationOptions
+  options: LLMGenerationOptions,
+  enableTools: boolean
 ): Promise<ReadableStream<Uint8Array>> => {
-  const reply = await chatWithGemini(provider, model, history, systemPrompt, options);
-
   return new ReadableStream<Uint8Array>({
-    start(controller) {
+    async start(controller) {
       const encoder = new TextEncoder();
-      if (reply) {
-        controller.enqueue(encodeEvent(encoder, { type: 'delta', value: reply }));
+      try {
+        const reply = await chatWithGemini(
+          provider,
+          model,
+          history,
+          systemPrompt,
+          options,
+          enableTools
+        );
+        if (reply) {
+          controller.enqueue(encodeEvent(encoder, { type: 'delta', value: reply }));
+        }
+        controller.enqueue(encodeEvent(encoder, { type: 'done', value: reply }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        controller.enqueue(encodeEvent(encoder, { type: 'error', message }));
+      } finally {
+        controller.close();
       }
-      controller.enqueue(encodeEvent(encoder, { type: 'done', value: reply }));
-      controller.close();
     }
   });
 };

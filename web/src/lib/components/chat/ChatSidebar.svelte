@@ -13,7 +13,6 @@
     export let activeChatId = '';
     export let pendingChatIds: string[] = [];
     export let isCollapsed = false;
-    export let settingsHref = '#';
     export let isPersistingSettings = false;
     export let settingsPersistError: string | null = null;
 
@@ -22,6 +21,7 @@
         selectChat: string;
         renameChat: { id: string; title: string };
         deleteChat: string;
+        openSettings: void;
     }>();
 
     let editingChatId: string | null = null;
@@ -229,12 +229,13 @@
         </div>
 
         <div class="flex flex-col gap-3 text-xs text-surface-400">
-            <a
-                href={settingsHref}
-                class="font-semibold text-primary-300 transition hover:text-primary-200"
+            <button
+                type="button"
+                class="self-start bg-transparent p-0 font-semibold text-primary-300 transition hover:text-primary-200 focus:outline-none"
+                on:click={() => dispatch('openSettings')}
             >
                 Open LLM settings
-            </a>
+            </button>
             {#if isPersistingSettings}
                 <span class="text-[color:var(--color-surface-300)]">Saving…</span>
             {:else if settingsPersistError}
