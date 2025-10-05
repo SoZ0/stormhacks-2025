@@ -76,7 +76,7 @@ return [];
 
 	const cubismCorePromises = new Map<string, Promise<void>>();
 
-	const DEFAULT_MODEL_PATH = '/models/hiyori/hiyori_free_t08.model3.json';
+	const DEFAULT_MODEL_PATH = '/models/hiyori/runtime/hiyori_pro_t11.model3.json';
 	const DEFAULT_CUBISM_CORE_PATH = '/vendor/live2d/live2dcubismcore.min.js';
 	const DEFAULT_ANCHOR: { x: number; y: number } = { x: 0.5, y: 0.5 };
 	const DEFAULT_POSITION: { x: number; y: number } = { x: 0.5, y: 0.95 };

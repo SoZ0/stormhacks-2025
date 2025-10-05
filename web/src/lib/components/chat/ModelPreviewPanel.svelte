@@ -14,8 +14,20 @@
 	import type { ModelOption } from '$lib/chat/types';
 
 	const DEFAULT_MODEL: ModelOption = {
+		id: 'placeholder-model',
 		label: 'Model preview unavailable',
-		modelPath: '/models/hiyori/hiyori_free_t08.model3.json'
+		modelPath: '/models/hiyori/runtime/hiyori_pro_t11.model3.json',
+		availableModelFiles: ['/models/hiyori/runtime/hiyori_pro_t11.model3.json'],
+		cubismCorePath: '/vendor/live2d/live2dcubismcore.min.js',
+		anchor: { x: 0.5, y: 0.5 },
+		position: { x: 0.5, y: 0.95 },
+		scaleMultiplier: 1,
+		targetHeightRatio: 0.9,
+		createdAt: 0,
+		updatedAt: 0,
+		isCustom: false,
+		editable: false,
+		removable: false
 	};
 
 	export let state: ModelPreviewState = { models: [], index: 0, current: null };

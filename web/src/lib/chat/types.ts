@@ -1,9 +1,3 @@
-export interface ModelOption {
-  label: string;
-  modelPath: string;
-  cubismCorePath?: string;
-  anchor?: { x?: number; y?: number };
-  position?: { x?: number; y?: number };
-  scaleMultiplier?: number;
-  targetHeightRatio?: number;
-}
+import type { Live2DModelDefinition } from '$lib/live2d/types';
+
+export type ModelOption = Live2DModelDefinition;

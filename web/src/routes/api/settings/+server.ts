@@ -1,7 +1,13 @@
 import { json } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
-import { SETTINGS_COOKIE, defaultSettings, parseSettings, type LLMSettings } from '$lib/llm/settings';
+import {
+  SETTINGS_COOKIE,
+  defaultSettings,
+  normalizeGenerationOptions,
+  parseSettings,
+  type LLMSettings
+} from '$lib/llm/settings';
 import { findProvider, getProviders } from '$lib/server/providerStore';
 
 const cookieOptions = {
@@ -34,7 +40,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
     return json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { provider, model } = payload ?? {};
+  const { provider, model, options } = payload ?? {};
 
   if (!provider || typeof provider !== 'string') {
     return json({ error: 'provider is required' }, { status: 400 });
@@ -49,7 +55,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
     return json({ error: 'Unsupported provider' }, { status: 404 });
   }
 
-  const settings: LLMSettings = { provider: providerConfig.id, model };
+  const normalizedOptions = normalizeGenerationOptions(options);
+  const settings: LLMSettings = { provider: providerConfig.id, model, options: normalizedOptions };
   cookies.set(SETTINGS_COOKIE, JSON.stringify(settings), cookieOptions);
 
   return json({ settings });

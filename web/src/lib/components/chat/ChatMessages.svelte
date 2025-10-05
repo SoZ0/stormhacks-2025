@@ -29,7 +29,7 @@
   };
 </script>
 
-<div class="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+<div class="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4">
 	{#each messages as msg, index (msg.id ?? index)}
         <div
             class={
@@ -42,7 +42,7 @@
         >
 			{#if msg.sender === 'bot' && msg.hasThinking && msg.thinking}
 				<details
-					class="group rounded-xl border border-surface-800/50 bg-surface-900/70 px-4 py-4 text-[13px] leading-relaxed text-surface-300"
+					class="group rounded-xl border border-surface-800/50 bg-surface-900/70 px-5 py-5 text-[13px] leading-relaxed text-surface-300"
 					bind:open={msg.thinkingOpen}
 				>
 					<summary class="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-surface-400/80">
@@ -60,9 +60,9 @@
 			{/if}
 			{#if msg.streaming && !visibleText(msg)}
 				<div class="flex items-center gap-1 text-surface-400">
-					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-300"></span>
-					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-200" style="animation-delay: 120ms"></span>
-					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-100" style="animation-delay: 240ms"></span>
+					<span class="h-6 w-2 animate-pulse rounded-full bg-primary-300"></span>
+					<span class="h-4 w-2 animate-pulse rounded-full bg-primary-200" style="animation-delay: 120ms"></span>
+					<span class="h-4 w-2 animate-pulse rounded-full bg-primary-100" style="animation-delay: 240ms"></span>
 				</div>
 			{/if}
 		</div>
