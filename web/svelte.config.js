@@ -1,3 +1,4 @@
+import adapterAuto from '@sveltejs/adapter-auto';
 import adapterBun from 'svelte-adapter-bun';
 import adapterStatic from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
@@ -10,7 +11,9 @@ const config = {
 	kit: {
 		adapter: process.env.TAURI_BUILD === '1'
 			? adapterStatic({ fallback: 'index.html' })
-			: adapterBun()
+			: process.env.VERCEL
+				? adapterAuto()
+				: adapterBun()
 	}
 };
 
