@@ -21,70 +21,26 @@
   };
 
 </script>
-
-<div class="input-bar">
-  <textarea
-    bind:value
-    rows="1"
-    placeholder="Send a message..."
-    on:keydown={handleKey}
-    disabled={isSending || isDisabled}
-  ></textarea>
-  <button
-    class="send-btn"
-    type="button"
-    on:click={emitSend}
-    disabled={isSending || isDisabled}
-    aria-busy={isSending}
-  >
-    {#if isSending}
-      ...
-    {:else}
-      ➤
-    {/if}
-  </button>
+<div class="flex items-end gap-4 rounded-2xl border border-surface-800/60 bg-surface-950/60 px-4 py-4 shadow-lg shadow-surface-950/20">
+	<textarea
+		bind:value
+		rows="2"
+		placeholder="Send a message..."
+		on:keydown={handleKey}
+		disabled={isSending || isDisabled}
+		class="textarea w-full resize-none border-none bg-transparent text-sm text-surface-50 placeholder:text-surface-500 focus:outline-none"
+	></textarea>
+	<button
+		class="btn btn-icon btn-icon-lg bg-primary-500 text-[color:var(--color-primary-contrast-500)] text-xl transition disabled:opacity-60"
+		type="button"
+		on:click={emitSend}
+		disabled={isSending || isDisabled}
+		aria-busy={isSending}
+	>
+		{#if isSending}
+			<span class="animate-pulse">…</span>
+		{:else}
+			<span>➤</span>
+		{/if}
+	</button>
 </div>
-
-<style>
-  .input-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: #40414f;
-    padding: 10px 16px;
-    border-radius: 12px;
-    position: sticky;
-    bottom: 0;
-  }
-
-  textarea {
-    flex: 1;
-    resize: none;
-    border: none;
-    border-radius: 8px;
-    padding: 10px;
-    font-size: 1rem;
-    background: #40414f;
-    color: white;
-    outline: none;
-  }
-
-  .send-btn {
-    background: #10a37f;
-    border: none;
-    color: white;
-    padding: 10px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    min-width: 42px;
-  }
-
-  .send-btn:hover {
-    background: #0d8c6c;
-  }
-
-  .send-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-</style>

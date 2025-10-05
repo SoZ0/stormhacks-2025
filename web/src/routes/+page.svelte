@@ -7,19 +7,67 @@
         fetchProviderSettings,
         fetchModels,
         saveProviderSettings,
-        sendChatMessage,
-        type ChatMessagePayload
+        streamChatMessage,
+        type ChatMessagePayload,
+        type ChatStreamEvent
     } from '$lib/llm/client';
     import { defaultProvider } from '$lib/llm/providers';
     import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
+    import { AppBar } from '@skeletonlabs/skeleton-svelte';
     import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
     import ChatMessages from '$lib/components/chat/ChatMessages.svelte';
-    import ChatProviderControls from '$lib/components/chat/ChatProviderControls.svelte';
+    import ChatProviderControls, {
+        type ProviderSelectionState,
+        type ModelSelectionState
+    } from '$lib/components/chat/ChatProviderControls.svelte';
     import ChatInput from '$lib/components/chat/ChatInput.svelte';
-    import ModelPreviewPanel from '$lib/components/chat/ModelPreviewPanel.svelte';
+    import ModelPreviewPanel, { type ModelPreviewState } from '$lib/components/chat/ModelPreviewPanel.svelte';
     import type { ModelOption } from '$lib/chat/types';
 
-    type Message = ChatMessagePayload;
+    interface Message extends ChatMessagePayload {
+        id: string;
+        raw?: string;
+        thinking?: string | null;
+        hasThinking?: boolean;
+        thinkingOpen?: boolean;
+        streaming?: boolean;
+    }
+
+    const createMessageId = () => {
+        if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+            return crypto.randomUUID();
+        }
+        return Math.random().toString(36).slice(2);
+    };
+
+    const normalizeVisibleText = (value: string): string => value.replace(/^\s*\n?/, '').trimEnd();
+    const stripThinkingTags = (value: string): string => value.replace(/<\/?think>/gi, '').trim();
+
+    const extractMessageParts = (
+        raw: string
+    ): { text: string; thinking: string | null; hasThinking: boolean } => {
+        const openTag = '<think>';
+        const closeTag = '</think>';
+
+        const openIndex = raw.indexOf(openTag);
+        const closeIndex = raw.indexOf(closeTag);
+
+        if (openIndex === -1) {
+            return { text: normalizeVisibleText(raw), thinking: null, hasThinking: false };
+        }
+
+        if (closeIndex !== -1 && closeIndex > openIndex) {
+            const thinking = raw.slice(openIndex + openTag.length, closeIndex).trim();
+            const visibleBefore = raw.slice(0, openIndex);
+            const visibleAfter = raw.slice(closeIndex + closeTag.length);
+            const merged = normalizeVisibleText(`${visibleBefore}${visibleAfter}`);
+            return { text: merged, thinking: thinking || null, hasThinking: true };
+        }
+
+        const partialThinking = raw.slice(openIndex + openTag.length).trimStart();
+        const visible = normalizeVisibleText(raw.slice(0, openIndex));
+        return { text: visible, thinking: partialThinking || null, hasThinking: true };
+    };
 
     const demoModels: ModelOption[] = [
         {
@@ -46,6 +94,11 @@
 	];
 
     let previewIndex = 2; // start on HuoHuo (same as active index)
+    let modelPreviewState: ModelPreviewState = {
+        models: demoModels,
+        index: previewIndex,
+        current: demoModels[previewIndex] ?? demoModels[0]
+    };
 
     function nextModel() {
         previewIndex = (previewIndex + 1) % demoModels.length;
@@ -55,12 +108,7 @@
         previewIndex = (previewIndex - 1 + demoModels.length) % demoModels.length;
     }
 
-    function confirmModel() {
-            selectModel(previewIndex);
-     }
-        
-
-    const activeModelIndex = writable<number>(0);
+    const activeModelIndex = writable<number>(previewIndex);
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
     let providersError: string | null = null;
@@ -74,6 +122,20 @@
     let availableModels: string[] = [];
     let isModelsLoading = false;
     let currentModelError: string | null = null;
+    let providerSelectionState: ProviderSelectionState = {
+        options: providers,
+        loading: providersLoading,
+        selectedId: selectedProviderId,
+        current: currentProvider,
+        error: computedProvidersError,
+        settingsError: null
+    };
+    let modelSelectionState: ModelSelectionState = {
+        options: availableModels,
+        loading: isModelsLoading,
+        selected: selectedModel,
+        error: null
+    };
 
     let isCollapsed = false;
     let isSending = false;
@@ -84,14 +146,36 @@
     let allowPersist = false;
     let latestPersistSignature = '';
 
-    const initialBotMessage: Message = {
-        sender: 'bot',
-        text: 'Hi there! How can I help you today?'
+    let isPreviewDrawerOpen = false;
+    let previewDrawerEl: HTMLDivElement | null = null;
+
+    const openPreviewDrawer = () => {
+        isPreviewDrawerOpen = true;
     };
-    let messages: Message[] = [initialBotMessage];
+
+    const closePreviewDrawer = () => {
+        isPreviewDrawerOpen = false;
+    };
+
+    const handlePreviewDrawerKeydown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closePreviewDrawer();
+        }
+    };
+
+    const createInitialBotMessage = (): Message => ({
+        id: createMessageId(),
+        sender: 'bot',
+        text: 'Hi there! How can I help you today?',
+        raw: 'Hi there! How can I help you today?',
+        hasThinking: false,
+        thinkingOpen: false
+    });
+
+    let messages: Message[] = [createInitialBotMessage()];
     let input = "";
 
-    let live2dRef;
     let expressionOptions: string[] = [];
     let selectedExpression = '';
 
@@ -150,7 +234,7 @@
     };
 
     const startNewChat = () => {
-        messages = [initialBotMessage];
+        messages = [createInitialBotMessage()];
         error = null;
     };
 
@@ -206,8 +290,20 @@
             return;
         }
 
-        const nextMessages: Message[] = [...messages, { sender: 'user', text: trimmed }];
-        const payload: ChatMessagePayload[] = nextMessages.map(({ sender, text }) => ({ sender, text }));
+        const userMessage: Message = {
+            id: createMessageId(),
+            sender: 'user',
+            text: trimmed,
+            raw: trimmed,
+            hasThinking: false,
+            thinkingOpen: false
+        };
+
+        const nextMessages: Message[] = [...messages, userMessage];
+        const payload: ChatMessagePayload[] = nextMessages.map(({ sender, raw, text }) => ({
+            sender,
+            text: raw ?? text
+        }));
 
         messages = nextMessages;
         input = "";
@@ -215,8 +311,59 @@
         isSending = true;
 
         try {
-            const reply = await sendChatMessage(selectedProviderId, selectedModel, payload);
-            messages = [...nextMessages, { sender: 'bot', text: reply }];
+            const assistantMessage: Message = {
+                id: createMessageId(),
+                sender: 'bot',
+                text: '',
+                raw: '',
+                streaming: true,
+                hasThinking: false,
+                thinkingOpen: true
+            };
+
+            messages = [...nextMessages, assistantMessage];
+
+            const updateAssistant = (updater: (current: Message) => Message) => {
+                messages = messages.map((message) =>
+                    message.id === assistantMessage.id ? updater(message) : message
+                );
+            };
+
+            await streamChatMessage(selectedProviderId, selectedModel, payload, (event: ChatStreamEvent) => {
+                if (event.type === 'delta' && event.value) {
+                    assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
+                    const { text, thinking, hasThinking } = extractMessageParts(assistantMessage.raw ?? '');
+                    assistantMessage.text = text;
+                    assistantMessage.thinking = thinking;
+                    assistantMessage.hasThinking = hasThinking;
+                    assistantMessage.thinkingOpen = hasThinking
+                        ? assistantMessage.streaming !== false
+                            ? assistantMessage.thinkingOpen ?? true
+                            : assistantMessage.thinkingOpen ?? false
+                        : false;
+                    updateAssistant(() => ({ ...assistantMessage }));
+                }
+
+                if (event.type === 'done') {
+                    if (event.value && (!assistantMessage.raw || assistantMessage.raw !== event.value)) {
+                        assistantMessage.raw = event.value;
+                    }
+
+                    const finalRaw = assistantMessage.raw ?? event.value ?? '';
+                    const { text, thinking, hasThinking } = extractMessageParts(finalRaw);
+                    const fallbackVisible = text || (hasThinking ? stripThinkingTags(finalRaw) : finalRaw).trim();
+                    assistantMessage.text = fallbackVisible;
+                    assistantMessage.thinking = thinking;
+                    assistantMessage.hasThinking = hasThinking;
+                    assistantMessage.streaming = false;
+                    assistantMessage.thinkingOpen = hasThinking ? false : undefined;
+                    updateAssistant(() => ({ ...assistantMessage }));
+                }
+
+                if (event.type === 'error') {
+                    throw new Error(event.message ?? 'An unexpected error occurred');
+                }
+            });
         } catch (err) {
             error = err instanceof Error ? err.message : 'An unexpected error occurred';
             messages = nextMessages;
@@ -225,17 +372,28 @@
         }
     };
 
-    onMount(async () => {
-        if (window.innerWidth <= 800) isCollapsed = true;
+    onMount(() => {
+        isPreviewDrawerOpen = false;
 
-        await loadProviders();
-        await loadSettings();
-        await ensureModels(selectedProviderId);
-        allowPersist = true;
-        latestPersistSignature = '';
+        if (typeof window !== 'undefined' && window.innerWidth <= 800) {
+            isCollapsed = true;
+        }
+
+        void (async () => {
+            await loadProviders();
+            await loadSettings();
+            await ensureModels(selectedProviderId);
+            allowPersist = true;
+            latestPersistSignature = '';
+        })();
     });
 
     $: currentModel = demoModels[$activeModelIndex] ?? demoModels[0];
+    $: modelPreviewState = {
+        models: demoModels,
+        index: previewIndex,
+        current: currentModel
+    };
     $: currentProvider = providers.find((provider) => provider.id === selectedProviderId) ?? defaultProvider;
     $: computedProvidersError = providersError ?? (providers.length === 0 && !providersLoading
             ? 'No providers found. Visit settings to add one.'
@@ -243,6 +401,20 @@
     $: availableModels = modelsByProvider[selectedProviderId] ?? [];
     $: isModelsLoading = Boolean(modelsLoading[selectedProviderId]);
     $: currentModelError = modelsError[selectedProviderId] ?? null;
+    $: providerSelectionState = {
+        options: providers,
+        loading: providersLoading,
+        selectedId: selectedProviderId,
+        current: currentProvider,
+        error: computedProvidersError,
+        settingsError: settingsLoadError
+    };
+    $: modelSelectionState = {
+        options: availableModels,
+        loading: isModelsLoading,
+        selected: selectedModel,
+        error: currentModelError
+    };
     $: if (!isModelsLoading && availableModels.length > 0 && !availableModels.includes(selectedModel)) {
         selectedModel = availableModels[0];
     }
@@ -254,164 +426,175 @@
         }
     }
 
-    const DEFAULT_CORE_PATH = '/vendor/live2d/live2dcubismcore.min.js';
-
-    $: previewModel = demoModels[previewIndex] ?? demoModels[0];
-
-    $: if (expressionOptions.length && !expressionOptions.includes(selectedExpression)) {
-    selectedExpression = expressionOptions[0];
-    }
-    $: if (selectedExpression) {
-    live2dRef?.setExpression(selectedExpression);
-    }
 </script>
 		
 	
 
 
-<!-- markup -->
-<button class="toggle-btn" on:click={toggleSidebar}>☰</button>
+{#snippet appBarLead()}
+    <div class="flex items-center gap-4">
+        <button
+            type="button"
+            class="btn btn-icon btn-icon-base border border-surface-800/50 bg-surface-950/60 text-lg text-surface-200 transition hover:text-surface-50 lg:hidden"
+            on:click={toggleSidebar}
+            aria-label="Toggle navigation"
+        >
+            ☰
+        </button>
+        <div class="flex flex-col">
+            <span class="text-xs font-semibold uppercase tracking-[0.35em] text-primary-300">StormHacks</span>
+            <span class="text-lg font-semibold text-surface-50">Agent Studio</span>
+        </div>
+    </div>
+{/snippet}
 
-<div class="layout">
-    <ChatSidebar
-        {isCollapsed}
-        settingsHref={resolve('/settings')}
-        {isPersistingSettings}
-        {settingsPersistError}
-        on:newChat={startNewChat}
-    />
+{#snippet appBarTrail()}
+    <button
+        type="button"
+        class="btn btn-base hidden bg-primary-500 text-[color:var(--color-primary-contrast-500)] font-semibold tracking-wide shadow-primary-500/30 lg:inline-flex"
+        on:click={startNewChat}
+    >
+        New Conversation
+    </button>
+{/snippet}
 
-    <div class="flex flex-col md:flex-row w-full h-full">
-        <section class="chat-area relative w-full h-full">
-            <ChatMessages {messages} />
+<div class="flex min-h-screen flex-col bg-gradient-to-br from-surface-950 via-surface-950/95 to-surface-900 text-surface-50">
+    <AppBar
+        lead={appBarLead}
+        trail={appBarTrail}
+        background="bg-surface-950/70"
+        border="border-b border-surface-800/50"
+        shadow="shadow-lg shadow-surface-950/30"
+        padding="px-4 py-4 lg:px-8"
+        classes="sticky top-0 z-40 backdrop-blur-xl"
+    >
+        <p class="text-sm text-surface-400">Harness your favourite models, orchestrate agents, and ship faster.</p>
+    </AppBar>
 
-            <div class="flex justify-center pb-10">
-                <div class="flex flex-col md:flex-row md:items-end gap-6 w-full md:w-auto">
-                    <ChatProviderControls
-                        {providers}
-                        {providersLoading}
-                        {selectedProviderId}
-                        {currentProvider}
-                        {computedProvidersError}
-                        {settingsLoadError}
-                        {availableModels}
-                        {selectedModel}
-                        {isModelsLoading}
-                        {currentModelError}
-                        on:providerChange={({ detail }) => handleProviderChange(detail)}
-                        on:modelChange={({ detail }) => (selectedModel = detail)}
-                    />
-                    <div class="composer-input-wrapper">
-                        <ChatInput
-                            bind:value={input}
-                            {isSending}
-                            isDisabled={isModelsLoading || !selectedModel}
-                            on:send={sendMessage}
+    <div class="relative flex flex-1 overflow-hidden">
+        {#if !isCollapsed}
+            <button
+                type="button"
+                class="fixed inset-0 z-20 bg-surface-950/60 backdrop-blur-sm transition lg:hidden"
+                aria-label="Close sidebar"
+                on:click={toggleSidebar}
+            ></button>
+        {/if}
+
+        <ChatSidebar
+            {isCollapsed}
+            settingsHref={resolve('/settings')}
+            {isPersistingSettings}
+            {settingsPersistError}
+            on:newChat={startNewChat}
+        />
+
+        <main class="relative z-10 flex-1 overflow-hidden">
+            <div class="flex h-full w-full flex-col gap-4 px-4 pb-8 pt-4 lg:px-8 lg:pb-12 2xl:px-12">
+                <div class="flex h-full flex-col gap-4 xl:flex-row xl:items-stretch xl:gap-8">
+                    <section class="relative flex h-full flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
+                        <ChatMessages {messages} />
+
+                        <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
+                            <div class="flex flex-col gap-4">
+                                <ChatProviderControls
+                                    providerState={providerSelectionState}
+                                    modelState={modelSelectionState}
+                                    on:providerChange={({ detail }) => {
+                                        selectedProviderId = detail;
+                                        void handleProviderChange(detail);
+                                    }}
+                                    on:modelChange={({ detail }) => (selectedModel = detail)}
+                                />
+                                <div class="flex flex-col gap-2 sm:flex-row xl:hidden">
+                                    <button
+                                        type="button"
+                                        class="btn btn-base flex-1 border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                        on:click={startNewChat}
+                                    >
+                                        New Chat
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="btn btn-base flex-1 bg-primary-500 text-sm font-semibold text-[color:var(--color-primary-contrast-500)] shadow-lg shadow-primary-500/25"
+                                        on:click={openPreviewDrawer}
+                                    >
+                                        View Model
+                                    </button>
+                                </div>
+                                <ChatInput
+                                    bind:value={input}
+                                    {isSending}
+                                    isDisabled={isModelsLoading || !selectedModel}
+                                    on:send={sendMessage}
+                                />
+                                {#if error}
+                                    <p
+                                        class="rounded-2xl border border-error-500/40 bg-error-500/20 px-4 py-4 text-sm text-error-50"
+                                        role="alert"
+                                    >
+                                        {error}
+                                    </p>
+                                {/if}
+                            </div>
+                        </div>
+                    </section>
+
+                    <aside class="hidden min-h-[420px] xl:block xl:w-[420px] xl:flex-none 2xl:w-[480px]">
+                        <ModelPreviewPanel
+                            state={modelPreviewState}
+                            bind:expressionOptions
+                            bind:selectedExpression
+                            on:prev={prevModel}
+                            on:next={nextModel}
+                            on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
                         />
+                    </aside>
+                </div>
+            </div>
+        </main>
+        {#if isPreviewDrawerOpen}
+            <div
+                class="fixed inset-0 z-50 flex flex-col bg-surface-950/80 backdrop-blur-sm xl:hidden"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Model preview"
+                tabindex="-1"
+                on:keydown={handlePreviewDrawerKeydown}
+                bind:this={previewDrawerEl}
+            >
+                <button
+                    type="button"
+                    class="absolute inset-0 z-0 h-full w-full cursor-default bg-transparent"
+                    on:click={closePreviewDrawer}
+                    aria-label="Dismiss model preview"
+                ></button>
+                <div class="relative z-10 mt-auto w-full px-4 pb-6">
+                    <div class="relative mx-auto max-h-[80vh] w-full max-w-lg overflow-hidden">
+                        <div class="max-h-[80vh] min-h-[360px] overflow-y-auto rounded-3xl">
+                            <ModelPreviewPanel
+                                state={modelPreviewState}
+                                bind:expressionOptions
+                                bind:selectedExpression
+                                on:prev={prevModel}
+                                on:next={nextModel}
+                                on:confirm={({ detail }) => {
+                                    selectModel(detail ?? previewIndex);
+                                    closePreviewDrawer();
+                                }}
+                            />
+                        </div>
+                        <button
+                            type="button"
+                            class="btn btn-icon btn-icon-base absolute right-5 top-5 bg-surface-950/80 text-lg text-surface-200 shadow-lg shadow-surface-950/40"
+                            on:click={closePreviewDrawer}
+                            aria-label="Close model preview"
+                        >
+                            ✕
+                        </button>
                     </div>
                 </div>
             </div>
-
-            {#if error}
-                <p class="error-banner" role="alert">{error}</p>
-            {/if}
-        </section>
-
-        <div class="flex w-1/3 h-full">
-            <div class="absolute z-50 h-full right-0 w-1/3">
-                <ModelPreviewPanel
-                    models={demoModels}
-                    {currentModel}
-                    {previewIndex}
-                    on:prev={prevModel}
-                    on:next={nextModel}
-                    on:confirm={confirmModel}
-                />
-            </div>
-            <div class="expr"> <select bind:value={selectedExpression} on:change={() => live2dRef?.setExpression(selectedExpression)} disabled={!expressionOptions.length} > 
-                {#each expressionOptions as name} 
-                <option value={name}>{name}</option> {/each} </select> </div>
-        </div>
+        {/if}
     </div>
 </div>
-
-
-<style>
-    :global(body) {
-        margin: 0;
-        font-family: system-ui, sans-serif;
-        background: #343541;
-        color: #ececf1;
-        overflow: hidden;
-    }
-
-    .layout {
-        display: flex;
-        height: 100vh;
-    }
-
-    /* sidebar */
-    /* toggle */
-    .toggle-btn {
-        position: fixed;
-        top: 15px;
-        left: 15px;
-        background: #444654;
-        color: white;
-        border: none;
-        padding: 8px 10px;
-        border-radius: 6px;
-        cursor: pointer;
-        z-index: 1001;
-        font-size: 18px;
-    }
-    .toggle-btn:hover {
-        background: #5c5e70;
-    }
-
-    /* chat main area */
-    .chat-area {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        background: #343541;
-        position: relative;
-        transition: margin-left 0.3s ease;
-    }
-
-
-    .error-banner {
-        margin: 8px 20px 20px;
-        padding: 10px 12px;
-        border-radius: 6px;
-        background: #5c2830;
-        color: #ffd8da;
-        font-size: 0.85rem;
-    }
-
-    .composer-input-wrapper {
-        width: min(720px, 100%);
-    }
-
-    .composer-input-wrapper :global(.input-bar) {
-        width: 100%;
-        border-radius: 24px;
-    }
-
-    .expr {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    background: rgba(34,34,34,.8);
-    padding: 6px 10px;
-    border-radius: 8px;
-    z-index: 60;
-    }
-    .expr select {
-    background: #2a2b32;
-    color: #ececf1;
-    border: 1px solid #3b3c42;
-    border-radius: 6px;
-    padding: 4px 8px;
-    }
-</style>

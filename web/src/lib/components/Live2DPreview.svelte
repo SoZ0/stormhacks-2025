@@ -1,9 +1,20 @@
+<script lang="ts" context="module">
+    export type Live2DPreviewConfig = {
+        modelPath?: string | null;
+        cubismCorePath?: string;
+        anchor?: { x?: number; y?: number };
+        position?: { x?: number; y?: number };
+        scaleMultiplier?: number;
+        targetHeightRatio?: number;
+    };
+</script>
+
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
-	import { Application, type IApplicationOptions } from 'pixi.js';
-	import { Ticker } from '@pixi/ticker';
-	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
+    import { onMount } from 'svelte';
+    import { base } from '$app/paths';
+    import { Application, type IApplicationOptions } from 'pixi.js';
+    import { Ticker } from '@pixi/ticker';
+    import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
 
 	interface Live2DWindow extends Window {
 		Live2DCubismCore?: unknown;
@@ -65,26 +76,36 @@ return [];
 
 	const cubismCorePromises = new Map<string, Promise<void>>();
 
-	export let modelPath: string | null = null;
-	export let modelDirectory = '/models/hiyori';
-	export let modelFilename = 'hiyori_free_t08.model3.json';
-	export let cubismCorePath = '/vendor/live2d/live2dcubismcore.min.js';
-	export let pixiOptions: Partial<IApplicationOptions> = {};
-	export let targetHeightRatio = 0.9;
-	export let scaleMultiplier = 1;
-	export let positionX = 0.5;
-export let positionY = 0.95;
-export let anchorX = 0.5;
-export let anchorY = 0.5;
+	const DEFAULT_MODEL_PATH = '/models/hiyori/hiyori_free_t08.model3.json';
+	const DEFAULT_CUBISM_CORE_PATH = '/vendor/live2d/live2dcubismcore.min.js';
+	const DEFAULT_ANCHOR: { x: number; y: number } = { x: 0.5, y: 0.5 };
+	const DEFAULT_POSITION: { x: number; y: number } = { x: 0.5, y: 0.95 };
+	const DEFAULT_TARGET_HEIGHT_RATIO = 0.9;
+	const DEFAULT_SCALE_MULTIPLIER = 1;
 
-	let resolvedModelUrl = staticPathFor(joinSegments(modelDirectory, modelFilename));
-	let resolvedCubismCoreSrc = staticPathFor(cubismCorePath);
+	export let config: Live2DPreviewConfig = { modelPath: DEFAULT_MODEL_PATH };
+export let pixiOptions: Partial<IApplicationOptions> = {};
+export let loading = false;
 
-	$: resolvedModelUrl = modelPath
-		? staticPathFor(modelPath)
-		: staticPathFor(joinSegments(modelDirectory, modelFilename));
+	let anchorX = DEFAULT_ANCHOR.x;
+	let anchorY = DEFAULT_ANCHOR.y;
+	let positionX = DEFAULT_POSITION.x;
+	let positionY = DEFAULT_POSITION.y;
+	let targetHeightRatio = DEFAULT_TARGET_HEIGHT_RATIO;
+	let scaleMultiplier = DEFAULT_SCALE_MULTIPLIER;
+	let resolvedModelUrl = staticPathFor(DEFAULT_MODEL_PATH);
+	let resolvedCubismCoreSrc = staticPathFor(DEFAULT_CUBISM_CORE_PATH);
 
-	$: resolvedCubismCoreSrc = staticPathFor(cubismCorePath);
+	$: resolvedModelUrl = staticPathFor(config?.modelPath ?? DEFAULT_MODEL_PATH);
+	$: resolvedCubismCoreSrc = staticPathFor(
+		config?.cubismCorePath ?? DEFAULT_CUBISM_CORE_PATH
+	);
+	$: anchorX = config?.anchor?.x ?? DEFAULT_ANCHOR.x;
+	$: anchorY = config?.anchor?.y ?? DEFAULT_ANCHOR.y;
+	$: positionX = config?.position?.x ?? DEFAULT_POSITION.x;
+	$: positionY = config?.position?.y ?? DEFAULT_POSITION.y;
+	$: targetHeightRatio = config?.targetHeightRatio ?? DEFAULT_TARGET_HEIGHT_RATIO;
+	$: scaleMultiplier = config?.scaleMultiplier ?? DEFAULT_SCALE_MULTIPLIER;
 
 	const ensureCubismCore = async (src: string) => {
 		if (typeof window === 'undefined') return;
@@ -208,6 +229,7 @@ export let anchorY = 0.5;
 
 		const token = ++loadToken;
 		inFlightModelConfig = { modelUrl, coreSrc };
+		loading = true;
 
 		try {
 			await ensureCubismCore(coreSrc);
@@ -247,6 +269,7 @@ export let anchorY = 0.5;
 		} finally {
 			if (token === loadToken) {
 				inFlightModelConfig = null;
+				loading = false;
 			}
 		}
 	};
@@ -327,28 +350,18 @@ export let anchorY = 0.5;
 			app = null;
 			inFlightModelConfig = null;
 			loadedModelConfig = null;
+			loading = false;
 		};
 	});
 </script>
 
-<div class="viewer" bind:this={container}>
-	<canvas bind:this={canvas} aria-label="Live2D preview"></canvas>
-	<noscript>Enable JavaScript to preview the Live2D model.</noscript>
+<div class="relative h-full w-full overflow-hidden" bind:this={container}>
+	<canvas
+		bind:this={canvas}
+		aria-label="Live2D preview"
+		class="absolute inset-0 h-full w-full"
+	></canvas>
+	<noscript class="absolute inset-x-0 bottom-4 mx-auto max-w-xs rounded-md bg-surface-900/90 px-3 py-2 text-center text-xs text-surface-100 shadow-lg">
+		Enable JavaScript to preview the Live2D model.
+	</noscript>
 </div>
-
-<style>
-	.viewer {
-		position: relative;
-		width: 100%;
-		height: 100%;
-		overflow: hidden;
-	}
-
-	.viewer canvas {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100%;
-		height: 100%;
-	}
-</style>

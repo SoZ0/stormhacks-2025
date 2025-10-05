@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { findProvider } from '$lib/server/providerStore';
-import { sendProviderChat, type ProviderMessage } from '$lib/server/llm';
+import { streamProviderChat, type ProviderMessage } from '$lib/server/llm';
 
 interface ClientMessage {
   sender: 'user' | 'bot';
@@ -51,8 +51,14 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   const history = normalizeHistory(messages);
 
   try {
-    const reply = await sendProviderChat(providerConfig, model, history);
-    return json({ reply });
+    const stream = await streamProviderChat(providerConfig, model, history);
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'application/x-ndjson',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+      }
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return json({ error: message }, { status: 500 });

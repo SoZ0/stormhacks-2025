@@ -8,6 +8,14 @@ export interface ChatMessagePayload {
   text: string;
 }
 
+export type ChatStreamEventType = 'delta' | 'done' | 'error';
+
+export interface ChatStreamEvent {
+  type: ChatStreamEventType;
+  value?: string;
+  message?: string;
+}
+
 export interface ProviderSettingsPayload {
   provider?: ProviderId;
   model?: string;
@@ -25,11 +33,6 @@ interface ProviderModelsResponse {
 
 interface ProviderSettingsResponse {
   settings?: ProviderSettingsPayload;
-  error?: string;
-}
-
-interface ChatResponse {
-  reply?: string;
   error?: string;
 }
 
@@ -89,21 +92,112 @@ export const saveProviderSettings = async (provider: ProviderId, model: string) 
   ensureOk(response, await jsonOrNull<ProviderSettingsResponse>(response), 'Unable to save settings');
 };
 
-export const sendChatMessage = async (
+const parseStreamLine = (line: string): ChatStreamEvent | null => {
+  try {
+    const parsed = JSON.parse(line);
+    if (!parsed || typeof parsed.type !== 'string') {
+      return null;
+    }
+    if (parsed.type !== 'delta' && parsed.type !== 'done' && parsed.type !== 'error') {
+      return null;
+    }
+    return parsed as ChatStreamEvent;
+  } catch {
+    return null;
+  }
+};
+
+export const streamChatMessage = async (
   provider: ProviderId,
   model: string,
-  messages: ChatMessagePayload[]
-): Promise<string> => {
+  messages: ChatMessagePayload[],
+  onEvent: (event: ChatStreamEvent) => void
+): Promise<void> => {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider, model, messages })
   });
 
-  const data = ensureOk(response, await jsonOrNull<ChatResponse>(response), 'Request failed');
-  if (!data.reply) {
-    throw new Error('Response did not include a reply message');
+  if (!response.ok) {
+    const data = await jsonOrNull<{ error?: string }>(response);
+    const message = data?.error ?? `Request failed (${response.status})`;
+    throw new Error(message);
   }
 
-  return data.reply;
+  const body = response.body;
+  if (!body) {
+    throw new Error('Streaming is not supported in this environment');
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sawDone = false;
+
+  const handleEvent = (event: ChatStreamEvent) => {
+    if (event.type === 'error') {
+      onEvent(event);
+      throw new Error(event.message ?? 'Request failed');
+    }
+
+    onEvent(event);
+
+    if (event.type === 'done') {
+      sawDone = true;
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      } else if (done) {
+        buffer += decoder.decode();
+      }
+
+      let newlineIndex = buffer.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+
+        if (line) {
+          const event = parseStreamLine(line);
+          if (event) {
+            handleEvent(event);
+            if (sawDone) {
+              return;
+            }
+          }
+        }
+
+        newlineIndex = buffer.indexOf('\n');
+      }
+
+      if (done) {
+        const remainder = buffer.trim();
+        if (remainder) {
+          const event = parseStreamLine(remainder);
+          if (event) {
+            handleEvent(event);
+            if (sawDone) {
+              return;
+            }
+          }
+        }
+
+        if (!sawDone) {
+          handleEvent({ type: 'done' });
+        }
+        return;
+      }
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 };

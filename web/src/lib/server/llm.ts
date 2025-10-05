@@ -6,6 +6,12 @@ export interface ProviderMessage {
   content: string;
 }
 
+export interface ChatStreamEvent {
+  type: 'delta' | 'done' | 'error';
+  value?: string;
+  message?: string;
+}
+
 const uniqueSorted = (values: string[]) => Array.from(new Set(values)).sort();
 
 const normalizeUrl = (baseUrl: string, port?: string): string => {
@@ -50,16 +56,19 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
   }
 };
 
-export const sendProviderChat = async (
+const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
+  encoder.encode(`${JSON.stringify(event)}\n`);
+
+export const streamProviderChat = async (
   provider: ProviderConfig,
   model: string,
   history: ProviderMessage[]
-): Promise<string> => {
+): Promise<ReadableStream<Uint8Array>> => {
   switch (provider.kind) {
     case 'ollama':
-      return chatWithOllama(provider, model, history);
+      return streamOllamaChat(provider, model, history);
     case 'gemini':
-      return chatWithGemini(provider, model, history);
+      return streamGeminiChat(provider, model, history);
     default:
       throw new Error(`Unsupported provider: ${provider.kind}`);
   }
@@ -83,11 +92,11 @@ const listOllamaModels = async (provider: ProviderConfig): Promise<string[]> => 
   return uniqueSorted(models);
 };
 
-const chatWithOllama = async (
+const streamOllamaChat = async (
   provider: ProviderConfig,
   model: string,
   history: ProviderMessage[]
-): Promise<string> => {
+): Promise<ReadableStream<Uint8Array>> => {
   const baseUrl = buildOllamaBaseUrl(provider);
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
@@ -97,7 +106,7 @@ const chatWithOllama = async (
     body: JSON.stringify({
       model,
       messages: history,
-      stream: false
+      stream: true
     })
   });
 
@@ -106,13 +115,147 @@ const chatWithOllama = async (
     throw new Error(`Ollama request failed (${response.status}): ${errorText}`);
   }
 
-  const data = await response.json();
-  const reply: string | undefined = data?.message?.content ?? data?.response;
-  if (!reply) {
-    throw new Error('Ollama response missing assistant reply');
+  if (!response.body) {
+    throw new Error('Ollama response missing body');
   }
 
-  return reply;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      let buffer = '';
+      let aggregated = '';
+      let lastChunk = '';
+      let streamClosed = false;
+
+      const send = (event: ChatStreamEvent) => {
+        if (!streamClosed) {
+          controller.enqueue(encodeEvent(encoder, event));
+        }
+      };
+
+      const closeWith = (event?: ChatStreamEvent) => {
+        if (!streamClosed) {
+          if (event) {
+            send(event);
+          }
+          streamClosed = true;
+          controller.close();
+        }
+      };
+
+      const processLine = (line: string): boolean => {
+        if (!line) return false;
+
+        const parsed = JSON.parse(line);
+
+        if (parsed?.error) {
+          const errorMessage = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
+          throw new Error(errorMessage);
+        }
+
+        const content: string | undefined = parsed?.message?.content;
+        if (typeof content === 'string' && content.length) {
+          let delta = '';
+
+          if (content === lastChunk) {
+            delta = '';
+          } else if (content.startsWith(aggregated)) {
+            delta = content.slice(aggregated.length);
+            aggregated = content;
+          } else if (!aggregated) {
+            delta = content;
+            aggregated = content;
+          } else if (aggregated.startsWith(content)) {
+            delta = '';
+          } else {
+            delta = content;
+            aggregated += content;
+          }
+
+          lastChunk = content;
+
+          if (delta) {
+            send({ type: 'delta', value: delta });
+          }
+        }
+
+        if (parsed?.done) {
+          const finalResponse: string | undefined =
+            typeof parsed?.response === 'string' && parsed.response.length > 0
+              ? parsed.response
+              : typeof parsed?.message?.content === 'string' && parsed.message.content.length > 0
+                ? parsed.message.content
+                : undefined;
+
+          const resolved = finalResponse ?? aggregated;
+
+          if (finalResponse) {
+            aggregated = finalResponse;
+            lastChunk = finalResponse;
+          }
+
+          closeWith({ type: 'done', value: resolved });
+          return true;
+        }
+
+        return false;
+      };
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+
+          if (value) {
+            buffer += decoder.decode(value, { stream: !done });
+          } else if (done) {
+            buffer += decoder.decode();
+          }
+
+          let newlineIndex = buffer.indexOf('\n');
+          while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+
+            const shouldBreak = processLine(line);
+            if (shouldBreak) {
+              await reader.cancel().catch(() => undefined);
+              return;
+            }
+
+            newlineIndex = buffer.indexOf('\n');
+          }
+
+          if (done) {
+            const remainder = buffer.trim();
+            if (remainder) {
+              const shouldBreak = processLine(remainder);
+              if (shouldBreak) {
+                await reader.cancel().catch(() => undefined);
+                return;
+              }
+            }
+            break;
+          }
+        }
+
+        if (!streamClosed) {
+          closeWith({ type: 'done', value: aggregated });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown streaming error';
+        send({ type: 'error', message });
+        streamClosed = true;
+        controller.close();
+        await reader.cancel().catch(() => undefined);
+      }
+    },
+    async cancel() {
+      await reader.cancel().catch(() => undefined);
+    }
+  });
 };
 
 const listGeminiModels = async (provider: ProviderConfig): Promise<string[]> => {
@@ -178,4 +321,23 @@ const chatWithGemini = async (
   }
 
   return reply;
+};
+
+const streamGeminiChat = async (
+  provider: ProviderConfig,
+  model: string,
+  history: ProviderMessage[]
+): Promise<ReadableStream<Uint8Array>> => {
+  const reply = await chatWithGemini(provider, model, history);
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      if (reply) {
+        controller.enqueue(encodeEvent(encoder, { type: 'delta', value: reply }));
+      }
+      controller.enqueue(encodeEvent(encoder, { type: 'done', value: reply }));
+      controller.close();
+    }
+  });
 };

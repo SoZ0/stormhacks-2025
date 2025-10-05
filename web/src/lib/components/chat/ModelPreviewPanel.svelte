@@ -1,79 +1,127 @@
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import { Live2DPreview } from '$lib';
-  import type { ModelOption } from '$lib/chat/types';
+<script lang="ts" context="module">
+	import type { ModelOption as ModelOptionType } from '$lib/chat/types';
 
-  export let models: ModelOption[] = [];
-  export let currentModel: ModelOption;
-  export let previewIndex = 0;
-
-  const dispatch = createEventDispatcher<{ prev: void; next: void; confirm: number }>();
-
-  const handlePrev = () => dispatch('prev');
-  const handleNext = () => dispatch('next');
-  const handleConfirm = () => dispatch('confirm', previewIndex);
+	export type ModelPreviewState = {
+		models: ModelOptionType[];
+		index: number;
+		current: ModelOptionType | null;
+	};
 </script>
 
-<div class="model-preview">
-  <Live2DPreview
-    modelPath={currentModel.modelPath}
-    cubismCorePath={currentModel.cubismCorePath}
-    scaleMultiplier={currentModel.scaleMultiplier ?? 1}
-    targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
-    anchorX={currentModel.anchor?.x ?? 0.5}
-    anchorY={currentModel.anchor?.y ?? 0.5}
-    positionX={currentModel.position?.x ?? 0.5}
-    positionY={currentModel.position?.y ?? 0.95}
-  />
+<script lang="ts">
+	import { createEventDispatcher } from 'svelte';
+	import { Live2DPreview, type Live2DPreviewConfig } from '$lib';
+	import type { ModelOption } from '$lib/chat/types';
 
-  <div class="model-selector">
-    <button type="button" class="arrow-btn" on:click={handlePrev}>⟨</button>
-    <button type="button" class="confirm-btn" on:click={handleConfirm}>
-      {models[previewIndex]?.label ?? 'Select' }
-    </button>
-    <button type="button" class="arrow-btn" on:click={handleNext}>⟩</button>
-  </div>
+	const DEFAULT_MODEL: ModelOption = {
+		label: 'Model preview unavailable',
+		modelPath: '/models/hiyori/hiyori_free_t08.model3.json'
+	};
+
+	export let state: ModelPreviewState = { models: [], index: 0, current: null };
+	export let expressionOptions: string[] = [];
+	export let selectedExpression = '';
+
+	const dispatch = createEventDispatcher<{ prev: void; next: void; confirm: number }>();
+
+	const handlePrev = () => dispatch('prev');
+	const handleNext = () => dispatch('next');
+	const handleConfirm = () => dispatch('confirm', state.index);
+
+	let activeModel: ModelOption = DEFAULT_MODEL;
+	let previewConfig: Live2DPreviewConfig = { modelPath: DEFAULT_MODEL.modelPath };
+	let isPreviewLoading = false;
+	type Live2DPreviewHandle = { setExpression: (name: string) => void };
+	let live2dRef: Live2DPreviewHandle | null = null;
+
+	$: hasExpressions = expressionOptions.length > 0;
+	$: if (!hasExpressions && selectedExpression) {
+		selectedExpression = '';
+	}
+	$: if (hasExpressions && (!selectedExpression || !expressionOptions.includes(selectedExpression))) {
+		selectedExpression = expressionOptions[0];
+	}
+	$: if (selectedExpression && live2dRef) {
+		void expressionOptions;
+		live2dRef.setExpression(selectedExpression);
+	}
+
+	const handleExpressionChange = (event: Event) => {
+		const target = event.target as HTMLSelectElement;
+		const value = target?.value ?? '';
+		selectedExpression = value;
+		if (value && live2dRef) {
+			live2dRef.setExpression(value);
+		}
+	};
+
+	$: activeModel = state.current ?? state.models[state.index] ?? DEFAULT_MODEL;
+	$: previewConfig = {
+		modelPath: activeModel.modelPath,
+		cubismCorePath: activeModel.cubismCorePath,
+		scaleMultiplier: activeModel.scaleMultiplier,
+		targetHeightRatio: activeModel.targetHeightRatio,
+		anchor: activeModel.anchor,
+		position: activeModel.position
+	};
+</script>
+
+<div class="flex h-full flex-col gap-4 overflow-hidden rounded-3xl border border-surface-800/60 bg-gradient-to-b from-surface-950/80 via-surface-950/60 to-surface-950/30 p-4 shadow-xl shadow-surface-950/30">
+	<header class="flex flex-col gap-4">
+		<p class="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">Model Preview</p>
+		<h2 class="text-lg font-semibold text-surface-50">{activeModel.label}</h2>
+	</header>
+	<div class="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-surface-800/40 bg-surface-950/40 min-h-[360px]">
+		<Live2DPreview
+			config={previewConfig}
+			bind:loading={isPreviewLoading}
+			bind:expressions={expressionOptions}
+			bind:this={live2dRef}
+		/>
+		{#if isPreviewLoading}
+			<div class="absolute inset-0 z-20 flex items-center justify-center bg-surface-950/60 backdrop-blur-sm">
+				<div class="h-10 w-10 animate-spin rounded-full border-2 border-primary-400/80 border-t-transparent" aria-hidden="true"></div>
+				<span class="sr-only">Loading model preview…</span>
+			</div>
+		{/if}
+		{#if expressionOptions.length}
+			<div class="pointer-events-auto absolute left-4 top-4 flex flex-col gap-1 rounded-2xl border border-surface-800/50 bg-surface-950/80 px-3 py-2 text-xs text-surface-200 shadow-lg shadow-surface-950/40">
+				<span class="font-semibold uppercase tracking-[0.2em] text-surface-400">Expression</span>
+				<select
+					class="w-40 rounded-xl border border-surface-700/60 bg-surface-950/80 px-3 py-2 text-sm text-surface-100 focus:border-primary-400 focus:outline-none"
+					bind:value={selectedExpression}
+					aria-label="Select expression"
+					on:change={handleExpressionChange}
+				>
+					{#each expressionOptions as name}
+						<option value={name}>{name}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
+		<div class="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-surface-950/80 to-transparent"></div>
+	</div>
+	<div class="flex items-center justify-between gap-4 rounded-full border border-surface-800/40 bg-surface-950/70 px-4 py-4">
+		<button
+			type="button"
+			class="btn btn-icon btn-icon-base text-lg text-surface-200 transition hover:text-surface-50"
+			on:click={handlePrev}
+		>
+			⟨
+		</button>
+		<button
+			type="button"
+			class="btn btn-base bg-primary-500 text-[color:var(--color-primary-contrast-500)] font-semibold tracking-wide"
+			on:click={handleConfirm}
+		>
+			{state.models[state.index]?.label ?? 'Select'}
+		</button>
+		<button
+			type="button"
+			class="btn btn-icon btn-icon-base text-lg text-surface-200 transition hover:text-surface-50"
+			on:click={handleNext}
+		>
+			⟩
+		</button>
+	</div>
 </div>
-
-<style>
-  .model-preview {
-    position: relative;
-    height: 100%;
-  }
-
-  .model-selector {
-    position: absolute;
-    bottom: 5%;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: rgba(34, 34, 34, 0.8);
-    padding: 8px 16px;
-    border-radius: 12px;
-    backdrop-filter: blur(6px);
-  }
-
-  .arrow-btn {
-    background: transparent;
-    color: #fff;
-    font-size: 1.5rem;
-    border: none;
-    cursor: pointer;
-  }
-
-  .confirm-btn {
-    background: #10a37f;
-    color: white;
-    font-weight: 600;
-    padding: 6px 12px;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .confirm-btn:hover {
-    background: #0d8c6c;
-  }
-</style>

@@ -1,111 +1,112 @@
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
+<script lang="ts" context="module">
+	import type {
+		ProviderConfig as ProviderConfigType,
+		ProviderId as ProviderIdType
+	} from '$lib/llm/providers';
 
-  export let providers: ProviderConfig[] = [];
-  export let providersLoading = false;
-  export let selectedProviderId: ProviderId;
-  export let currentProvider: ProviderConfig;
-  export let computedProvidersError: string | null = null;
-  export let settingsLoadError: string | null = null;
-  export let availableModels: string[] = [];
-  export let selectedModel = '';
-  export let isModelsLoading = false;
-  export let currentModelError: string | null = null;
+	export type ProviderSelectionState = {
+		options: ProviderConfigType[];
+		loading: boolean;
+		selectedId: ProviderIdType | '';
+		current: ProviderConfigType | null;
+		error: string | null;
+		settingsError: string | null;
+	};
 
-  const dispatch = createEventDispatcher<{
-    providerChange: ProviderId;
-    modelChange: string;
-  }>();
-
-  const handleProviderChange = (event: Event) => {
-    const value = (event.currentTarget as HTMLSelectElement).value as ProviderId;
-    selectedProviderId = value;
-    dispatch('providerChange', value);
-  };
-
-  const handleModelChange = (event: Event) => {
-    const value = (event.currentTarget as HTMLSelectElement).value;
-    selectedModel = value;
-    dispatch('modelChange', value);
-  };
+	export type ModelSelectionState = {
+		options: string[];
+		loading: boolean;
+		selected: string;
+		error: string | null;
+	};
 </script>
 
-<div class="provider-controls">
-  <div class="config-group">
-    <label>
-      <span>Provider</span>
-      <select
-        bind:value={selectedProviderId}
-        on:change={handleProviderChange}
-        disabled={providersLoading || !providers.length}
-      >
-        {#each providers as option (option.id)}
-          <option value={option.id}>{option.label}</option>
-        {/each}
-      </select>
-    </label>
-    {#if providersLoading}
-      <p class="config-hint">Loading providers…</p>
-    {:else if computedProvidersError}
-      <p class="config-error">{computedProvidersError}</p>
-    {:else if currentProvider.description}
-      <p class="config-hint">{currentProvider.description}</p>
-    {/if}
-    {#if settingsLoadError}
-      <p class="config-error">{settingsLoadError}</p>
-    {/if}
-  </div>
+<script lang="ts">
+	import { createEventDispatcher } from 'svelte';
+	import type { ProviderId } from '$lib/llm/providers';
 
-  <div class="config-group">
-    <label>
-      <span>Model</span>
-      <select
-        bind:value={selectedModel}
-        on:change={handleModelChange}
-        disabled={isModelsLoading || !availableModels.length}
-      >
-        {#each availableModels as modelName (modelName)}
-          <option value={modelName}>{modelName}</option>
-        {/each}
-      </select>
-    </label>
-    {#if isModelsLoading}
-      <p class="config-hint">Loading models…</p>
-    {:else if currentModelError}
-      <p class="config-error">{currentModelError}</p>
-    {:else if !availableModels.length}
-      <p class="config-hint">No models available for this provider.</p>
-    {/if}
-  </div>
+	const EMPTY_PROVIDER_STATE: ProviderSelectionState = {
+		options: [],
+		loading: false,
+		selectedId: '' as ProviderId,
+		current: null,
+		error: null,
+		settingsError: null
+	};
+
+	const EMPTY_MODEL_STATE: ModelSelectionState = {
+		options: [],
+		loading: false,
+		selected: '',
+		error: null
+	};
+
+	export let providerState: ProviderSelectionState = EMPTY_PROVIDER_STATE;
+	export let modelState: ModelSelectionState = EMPTY_MODEL_STATE;
+
+	const dispatch = createEventDispatcher<{
+		providerChange: ProviderId;
+		modelChange: string;
+	}>();
+
+	const handleProviderChange = (event: Event) => {
+		const value = (event.currentTarget as HTMLSelectElement).value as ProviderId;
+		dispatch('providerChange', value);
+	};
+
+	const handleModelChange = (event: Event) => {
+		const value = (event.currentTarget as HTMLSelectElement).value;
+		dispatch('modelChange', value);
+	};
+</script>
+
+<div class="grid gap-4 lg:grid-cols-2">
+	<div class="flex flex-col gap-2">
+		<label class="text-xs font-semibold uppercase tracking-wide text-surface-400">
+			<span>Provider</span>
+			<select
+				value={providerState.selectedId}
+				on:change={handleProviderChange}
+				disabled={providerState.loading || !providerState.options.length}
+				class="input bg-surface-950/60 ring-1 ring-surface-800/60 text-sm text-surface-100 transition focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60"
+			>
+				{#each providerState.options as option (option.id)}
+					<option class="bg-surface-900" value={option.id}>{option.label}</option>
+				{/each}
+			</select>
+		</label>
+		{#if providerState.loading}
+			<p class="text-xs text-surface-400">Loading providers…</p>
+		{:else if providerState.error}
+			<p class="text-xs text-error-300">{providerState.error}</p>
+		{:else if providerState.current?.description}
+			<p class="text-xs text-surface-400/90">{providerState.current.description}</p>
+		{/if}
+		{#if providerState.settingsError}
+			<p class="text-xs text-error-300">{providerState.settingsError}</p>
+		{/if}
+	</div>
+
+	<div class="flex flex-col gap-2">
+		<label class="text-xs font-semibold uppercase tracking-wide text-surface-400">
+			<span>Model</span>
+			<select
+				value={modelState.selected}
+				on:change={handleModelChange}
+				disabled={modelState.loading || !modelState.options.length}
+				class="input bg-surface-950/60 ring-1 ring-surface-800/60 text-sm text-surface-100 transition focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60"
+			>
+				{#each modelState.options as modelName (modelName)}
+					<option class="bg-surface-900" value={modelName}>{modelName}</option>
+				{/each}
+			</select>
+		</label>
+		{#if modelState.loading}
+			<p class="text-xs text-surface-400">Loading models…</p>
+		{:else if modelState.error}
+			<p class="text-xs text-error-300">{modelState.error}</p>
+		{:else if !modelState.options.length}
+			<p class="text-xs text-surface-400/90">No models available for this provider.</p>
+		{/if}
+	</div>
 </div>
-
-<style>
-  .provider-controls {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 24px;
-  }
-
-  .config-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 180px;
-  }
-
-  .config-hint,
-  .config-error {
-    margin: 0;
-    font-size: 0.75rem;
-  }
-
-  .config-hint {
-    color: #8e8e8f;
-  }
-
-  .config-error {
-    color: #ff9aa2;
-  }
-</style>

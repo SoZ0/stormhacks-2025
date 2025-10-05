@@ -1,43 +1,70 @@
 <script lang="ts">
-  import { fly } from 'svelte/transition';
   import type { ChatMessagePayload } from '$lib/llm/client';
 
-  export let messages: ChatMessagePayload[] = [];
+  interface ChatDisplayMessage extends ChatMessagePayload {
+    id?: string;
+    raw?: string;
+    thinking?: string | null;
+    hasThinking?: boolean;
+    thinkingOpen?: boolean;
+    streaming?: boolean;
+  }
+
+  export let messages: ChatDisplayMessage[] = [];
+
+  const stripThinkingTags = (value: string) => value.replace(/<\/?think>/gi, '').trim();
+
+  const visibleText = (message: ChatDisplayMessage): string => {
+    const text = message.text?.trim();
+    if (text) return message.text ?? '';
+
+    if (message.hasThinking) {
+      return '';
+    }
+
+    const raw = message.raw?.trim();
+    if (!raw) return '';
+
+    return stripThinkingTags(raw);
+  };
 </script>
 
-<div class="messages">
-  {#each messages as msg, index (index)}
-    <div class={`message ${msg.sender}`} transition:fly={{ y: 10, duration: 150 }}>
-      {msg.text}
-    </div>
-  {/each}
+<div class="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+	{#each messages as msg, index (msg.id ?? index)}
+        <div
+            class={
+                `inline-flex max-w-full flex-col gap-4 rounded-2xl px-4 py-4 text-sm leading-relaxed shadow-sm ${
+                    msg.sender === 'bot'
+                        ? 'bg-surface-900/80 text-surface-50 shadow-surface-950/40'
+                        : 'ml-auto bg-primary-500 text-[color:var(--color-primary-contrast-500)] shadow-primary-500/30'
+             }`
+            }
+        >
+			{#if msg.sender === 'bot' && msg.hasThinking && msg.thinking}
+				<details
+					class="group rounded-xl border border-surface-800/50 bg-surface-900/70 px-4 py-4 text-[13px] leading-relaxed text-surface-300"
+					bind:open={msg.thinkingOpen}
+				>
+					<summary class="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-surface-400/80">
+						Thinking
+					</summary>
+					<pre class="mt-4 whitespace-pre-wrap text-surface-200/90">{msg.thinking}</pre>
+				</details>
+			{/if}
+			{#if visibleText(msg)}
+				<div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
+					{visibleText(msg)}
+				</div>
+			{:else if !msg.streaming}
+				<div class="text-xs italic text-surface-400">Model returned no visible response.</div>
+			{/if}
+			{#if msg.streaming && !visibleText(msg)}
+				<div class="flex items-center gap-1 text-surface-400">
+					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-300"></span>
+					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-200" style="animation-delay: 120ms"></span>
+					<span class="h-2 w-2 animate-pulse rounded-full bg-primary-100" style="animation-delay: 240ms"></span>
+				</div>
+			{/if}
+		</div>
+	{/each}
 </div>
-
-<style>
-  .messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .message {
-    max-width: 70%;
-    padding: 12px 16px;
-    border-radius: 10px;
-    line-height: 1.4;
-    word-wrap: break-word;
-  }
-
-  .message.bot {
-    background: #444654;
-    align-self: flex-start;
-  }
-
-  .message.user {
-    background: #10a37f;
-    align-self: flex-end;
-  }
-</style>
