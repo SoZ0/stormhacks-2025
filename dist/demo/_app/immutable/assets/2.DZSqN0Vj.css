@@ -1,0 +1,9 @@
+
+  .settings-modal.svelte-iij9ws {
+    max-height: min(92vh, 960px);
+  }
+
+  .settings-modal__content.svelte-iij9ws {
+    height: 100%;
+    overflow-y: auto;
+  }

@@ -8,19 +8,7 @@ import {
   type ValueOption,
   type YearOption
 } from '$lib/sfu/outlines/client';
-
-export type ToolFunctionDefinition = {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: {
-      type: 'object';
-      properties: Record<string, unknown>;
-      required?: string[];
-    };
-  };
-};
+import type { ToolFunctionDefinition } from '$lib/server/tools/types';
 
 const outlinesClient = createOutlinesClient();
 

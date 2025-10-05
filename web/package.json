@@ -12,7 +12,7 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "svelte-check --tsconfig ./tsconfig.json && eslint . --ext .js,.ts,.svelte",
 		"tauri:dev": "tauri dev",
-		"tauri:build": "cross-env LDAI_OUTPUT=\"src-tauri/target/release/bundle/appimage/StormHacks Desktop_${npm_package_version}_amd64.AppImage\" tauri build",
+		"tauri:build": "cross-env APPIMAGE_EXTRACT_AND_RUN=1 LDAI_OUTPUT=\"src-tauri/target/release/bundle/appimage/StormHacks Desktop_${npm_package_version}_amd64.AppImage\" tauri build",
 		"tauri:build:frontend": "cross-env TAURI_BUILD=1 vite build",
 		"tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
 		"tauri:android:init": "tauri android init",

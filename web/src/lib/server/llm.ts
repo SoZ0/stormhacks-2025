@@ -1,7 +1,7 @@
 import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
-import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
+import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
 
 export interface ProviderMessage {
   role: 'system' | 'user' | 'assistant';
@@ -98,16 +98,16 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
 const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
   encoder.encode(`${JSON.stringify(event)}\n`);
 
-const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.`;
+const TOOL_SYSTEM_PROMPT = `You can access tools to retrieve Simon Fraser University course outlines and to fetch webpages (including SFU domains and public sites). Call the relevant tool when you need factual details from those sources before answering, then summarize the retrieved information for the user.`;
 
 const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
   const alreadyPresent = history.some(
-    (message) => message.role === 'system' && message.content === SFU_TOOL_SYSTEM_PROMPT
+    (message) => message.role === 'system' && message.content === TOOL_SYSTEM_PROMPT
   );
   if (alreadyPresent) {
     return history;
   }
-  return [{ role: 'system', content: SFU_TOOL_SYSTEM_PROMPT }, ...history];
+  return [{ role: 'system', content: TOOL_SYSTEM_PROMPT }, ...history];
 };
 
 export const streamProviderChat = async (
@@ -144,7 +144,7 @@ const checkOllamaToolSupport = async (provider: ProviderConfig, model: string): 
   const requestBody: Record<string, unknown> = {
     model,
     stream: false,
-    tools: SFU_OUTLINES_TOOLS,
+    tools: REGISTERED_TOOLS,
     messages: [
       {
         role: 'user',
@@ -486,7 +486,7 @@ const handleToolCall = async (
   }
 
   try {
-    const result = await executeSfuOutlinesTool(toolName, call.function.arguments);
+    const result = await executeRegisteredTool(toolName, call.function.arguments);
     return {
       role: 'tool',
       tool_call_id: toolCallId,
@@ -530,7 +530,7 @@ const runOllamaChat = async (
   }
 
   if (enableTools) {
-    requestBase.tools = SFU_OUTLINES_TOOLS;
+    requestBase.tools = REGISTERED_TOOLS;
   }
 
   if (!enableTools) {
@@ -714,7 +714,7 @@ const buildGeminiSystemInstruction = (messages: string[]) =>
 
 const buildGeminiToolsPayload = () => [
   {
-    functionDeclarations: SFU_OUTLINES_TOOLS.map((tool) => ({
+    functionDeclarations: REGISTERED_TOOLS.map((tool) => ({
       name: tool.function.name,
       description: tool.function.description,
       parameters: tool.function.parameters
@@ -846,7 +846,7 @@ const createGeminiToolResponseContent = async (
   }
 
   try {
-    const data = await executeSfuOutlinesTool(normalized, rawArgs);
+    const data = await executeRegisteredTool(normalized, rawArgs);
     return {
       role: 'function',
       parts: [
