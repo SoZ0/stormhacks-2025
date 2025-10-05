@@ -1,7 +1,10 @@
+import Tar from 'tar-js';
+import { gzipSync, unzipSync } from 'fflate';
 import { createModel, type KaldiRecognizer, type Model } from 'vosk-browser';
 
 const DEFAULT_MODEL_URL = import.meta.env.VITE_VOSK_MODEL_PATH ??
-  '/models/vosk-model-small-en-us-0.15.tar.gz';
+  '/models/vosk-model-small-en-us-0.15.zip';
+const ZIP_EXTENSION = /\.zip(?:[?#].*)?$/i;
 
 export type OfflineSpeechErrorCode =
   | 'model-unavailable'
@@ -47,6 +50,72 @@ const DEFAULT_SAMPLE_RATE = 16000;
 const DEFAULT_BUFFER_SIZE = 4096;
 
 let cachedModelPromise: Promise<Model> | null = null;
+let cachedModelSource: string | null = null;
+let cachedPreparedModelPromise: Promise<string> | null = null;
+let cachedPreparedModelUrl: string | null = null;
+
+const resetModelCache = () => {
+  cachedModelPromise = null;
+  cachedModelSource = null;
+  cachedPreparedModelPromise = null;
+  if (cachedPreparedModelUrl) {
+    URL.revokeObjectURL(cachedPreparedModelUrl);
+    cachedPreparedModelUrl = null;
+  }
+};
+
+const prepareModelUrl = async (modelUrl: string): Promise<string> => {
+  if (!ZIP_EXTENSION.test(modelUrl)) {
+    return modelUrl;
+  }
+
+  const response = await fetch(modelUrl);
+  if (!response.ok) {
+    throw new OfflineSpeechError(
+      'model-unavailable',
+      `Failed to download offline speech model (${response.status} ${response.statusText}).`
+    );
+  }
+
+  const buffer = new Uint8Array(await response.arrayBuffer());
+
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid ZIP archive';
+    throw new OfflineSpeechError('model-unavailable', `Unable to unzip offline speech model: ${message}`);
+  }
+
+  const tar = new Tar();
+  let tarBytes: Uint8Array | null = null;
+  let fileCount = 0;
+
+  const entries = Object.entries(files).sort(([a], [b]) => a.localeCompare(b));
+  for (const [name, contents] of entries) {
+    if (name.endsWith('/')) {
+      continue;
+    }
+
+    const payload = contents instanceof Uint8Array ? contents : new Uint8Array(contents ?? []);
+    tarBytes = tar.append(name, payload);
+    fileCount += 1;
+  }
+
+  if (!fileCount || !tarBytes) {
+    throw new OfflineSpeechError('model-unavailable', 'The offline speech model archive was empty.');
+  }
+
+  const gzipped = gzipSync(tarBytes);
+  const gzippedBytes = new Uint8Array(gzipped);
+
+  if (cachedPreparedModelUrl) {
+    URL.revokeObjectURL(cachedPreparedModelUrl);
+  }
+  cachedPreparedModelUrl = URL.createObjectURL(new Blob([gzippedBytes], { type: 'application/gzip' }));
+
+  return cachedPreparedModelUrl;
+};
 
 const loadModel = async (modelUrl: string, logLevel: number): Promise<Model> => {
   if (!isOfflineSpeechSupported()) {
@@ -56,15 +125,27 @@ const loadModel = async (modelUrl: string, logLevel: number): Promise<Model> => 
     );
   }
 
-  if (!cachedModelPromise) {
-    cachedModelPromise = createModel(modelUrl, logLevel).catch((error: unknown) => {
-      cachedModelPromise = null;
-      const message = error instanceof Error ? error.message : String(error);
-      throw new OfflineSpeechError(
-        'model-unavailable',
-        `Unable to load offline speech model from ${modelUrl}. ${message}. Ensure the archive exists and is readable.`
-      );
+  if (!cachedModelPromise || cachedModelSource !== modelUrl) {
+    cachedModelSource = modelUrl;
+    cachedPreparedModelPromise = prepareModelUrl(modelUrl).catch((error) => {
+      cachedPreparedModelPromise = null;
+      cachedModelSource = null;
+      throw error;
     });
+
+    cachedModelPromise = cachedPreparedModelPromise
+      .then((resolvedUrl) => createModel(resolvedUrl, logLevel))
+      .catch((error: unknown) => {
+        resetModelCache();
+        if (error instanceof OfflineSpeechError) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new OfflineSpeechError(
+          'model-unavailable',
+          `Unable to load offline speech model from ${modelUrl}. ${message}. Ensure the archive exists and is readable.`
+        );
+      });
   }
 
   return cachedModelPromise;
@@ -284,8 +365,8 @@ export class OfflineSpeechController {
     if (this.model) {
       this.model.terminate();
       this.model = null;
-      cachedModelPromise = null;
     }
+    resetModelCache();
   }
 }
 

@@ -90,12 +90,8 @@ The binary will be located at `web/src-tauri/target/release/stormhacks_desktop` 
 
 ## Offline speech recognition
 - Download a Vosk model archive (for English, grab `vosk-model-small-en-us-0.15.zip` from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)).
-- Extract the zip locally, then repackage the folder as a gzipped tarball:
-  ```bash
-  unzip vosk-model-small-en-us-0.15.zip
-  tar -czf web/static/models/vosk-model-small-en-us-0.15.tar.gz vosk-model-small-en-us-0.15
-  ```
-- The desktop bundle (and dev server) will load the model from `web/static/models/vosk-model-small-en-us-0.15.tar.gz` by default. Adjust the location by setting `VITE_VOSK_MODEL_PATH` in `web/.env` to point at a different archive.
+- Drop the zip directly into `web/static/models/` — no repackaging is required. The runtime converts it to the expected `tar.gz` layout on the fly.
+- The desktop bundle (and dev server) will look for `web/static/models/vosk-model-small-en-us-0.15.zip` by default. Override the location by setting `VITE_VOSK_MODEL_PATH` in `web/.env` to point at a different archive (zip or tar.gz are both accepted).
 - The first microphone activation may take a few seconds while the model is unpacked in WebAssembly. Subsequent sessions reuse the in-memory model—no network access is required once the archive is present.
 
 ## Troubleshooting
