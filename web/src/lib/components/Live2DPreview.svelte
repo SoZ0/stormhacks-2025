@@ -50,9 +50,9 @@
 	export let targetHeightRatio = 0.9;
 	export let scaleMultiplier = 1;
 	export let positionX = 0.5;
-	export let positionY = 0.95;
-	export let anchorX = 0.5;
-	export let anchorY = 0.5;
+export let positionY = 0.95;
+export let anchorX = 0.5;
+export let anchorY = 0.5;
 
 	let resolvedModelUrl = staticPathFor(joinSegments(modelDirectory, modelFilename));
 	let resolvedCubismCoreSrc = staticPathFor(cubismCorePath);
