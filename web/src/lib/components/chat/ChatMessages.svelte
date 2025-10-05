@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatMessagePayload } from '$lib/llm/client';
+  import { markdownToHtml } from '$lib/utils/markdown';
 
   interface ChatDisplayMessage extends ChatMessagePayload {
     id?: string;
@@ -27,10 +28,24 @@
 
     return stripThinkingTags(raw);
   };
+
+  interface RenderedMessage extends ChatDisplayMessage {
+    visibleContent: string;
+    renderedHtml: string;
+  }
+
+  $: renderedMessages = messages.map<RenderedMessage>((message) => {
+    const content = visibleText(message);
+    return {
+      ...message,
+      visibleContent: content,
+      renderedHtml: content ? markdownToHtml(content) : ''
+    };
+  });
 </script>
 
 <div class="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4">
-	{#each messages as msg, index (msg.id ?? index)}
+	{#each renderedMessages as msg, index (msg.id ?? index)}
         <div
             class={
                 `inline-flex max-w-full flex-col gap-4 rounded-2xl px-4 py-4 text-sm leading-relaxed shadow-sm ${
@@ -51,14 +66,14 @@
 					<pre class="mt-4 whitespace-pre-wrap text-surface-200/90">{msg.thinking}</pre>
 				</details>
 			{/if}
-			{#if visibleText(msg)}
-				<div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
-					{visibleText(msg)}
+			{#if msg.visibleContent}
+				<div class="prose prose-invert prose-p:my-1 prose-pre:bg-surface-800/70 prose-pre:text-[13px] prose-pre:leading-relaxed prose-pre:p-3 prose-pre:rounded-lg max-w-none text-sm leading-relaxed">
+					{@html msg.renderedHtml}
 				</div>
 			{:else if !msg.streaming}
 				<div class="text-xs italic text-surface-400">Model returned no visible response.</div>
 			{/if}
-			{#if msg.streaming && !visibleText(msg)}
+			{#if msg.streaming && !msg.visibleContent}
 				<div class="flex items-center gap-1 text-surface-400">
 					<span class="h-6 w-2 animate-pulse rounded-full bg-primary-300"></span>
 					<span class="h-4 w-2 animate-pulse rounded-full bg-primary-200" style="animation-delay: 120ms"></span>

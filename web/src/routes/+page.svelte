@@ -26,11 +26,13 @@
     import type { ModelOption } from '$lib/chat/types';
     import Live2DModelManager from '$lib/components/live2d/Live2DModelManager.svelte';
     import { listLive2DModels } from '$lib/live2d/client';
+    import { trackMouthFromAudio, stopMouthTracking } from '$lib/live2d/mouth';
     import {
         defaultGenerationOptions,
         normalizeGenerationOptions,
         type LLMGenerationOptions
     } from '$lib/llm/settings';
+    import { toaster } from '$lib/stores/toaster';
 
     interface Message extends ChatMessagePayload {
         id: string;
@@ -97,11 +99,13 @@
     interface ChatConfig {
         systemPrompt: string;
         generationOptions: LLMGenerationOptions;
+        live2dModelId: string | null;
     }
 
     interface PersistedChatConfig {
         systemPrompt?: string | null;
         generationOptions?: unknown;
+        live2dModelId?: string | null;
     }
 
     interface PersistedChatState {
@@ -128,7 +132,8 @@
 
     const cloneChatConfig = (config: ChatConfig): ChatConfig => ({
         systemPrompt: config.systemPrompt ?? '',
-        generationOptions: cloneGenerationOptions(config.generationOptions)
+        generationOptions: cloneGenerationOptions(config.generationOptions),
+        live2dModelId: config.live2dModelId ?? null
     });
 
     let chats: ChatSummary[] = [];
@@ -136,7 +141,8 @@
     let chatConfigurations: Record<string, ChatConfig> = {};
     let baseChatConfig: ChatConfig = {
         systemPrompt: '',
-        generationOptions: { ...defaultGenerationOptions }
+        generationOptions: { ...defaultGenerationOptions },
+        live2dModelId: null
     };
     let activeChatId = '';
     let pendingChatIds: string[] = [];
@@ -199,6 +205,9 @@
         if (stored) {
             systemPrompt = stored.systemPrompt ?? '';
             generationOptions = cloneGenerationOptions(stored.generationOptions);
+            activeModelId = stored.live2dModelId ?? null;
+            syncLive2DSelectionFromActiveId({ fallbackToDefault: true });
+            persistActiveChatConfig({ save: false });
             return;
         }
 
@@ -206,13 +215,17 @@
         chatConfigurations = { ...chatConfigurations, [id]: fallback };
         systemPrompt = fallback.systemPrompt ?? '';
         generationOptions = cloneGenerationOptions(fallback.generationOptions);
+        activeModelId = fallback.live2dModelId ?? null;
+        syncLive2DSelectionFromActiveId({ fallbackToDefault: true });
+        persistActiveChatConfig({ save: false });
     }
 
     function persistActiveChatConfig(options?: { save?: boolean }) {
         if (!activeChatId) return;
         const nextConfig: ChatConfig = {
             systemPrompt,
-            generationOptions: cloneGenerationOptions(generationOptions)
+            generationOptions: cloneGenerationOptions(generationOptions),
+            live2dModelId: activeModelId ?? null
         };
         chatConfigurations = { ...chatConfigurations, [activeChatId]: nextConfig };
         if (options?.save ?? true) {
@@ -239,10 +252,16 @@
         if (!activeChatId) return;
         const currentConfig: ChatConfig = {
             systemPrompt,
-            generationOptions: cloneGenerationOptions(generationOptions)
+            generationOptions: cloneGenerationOptions(generationOptions),
+            live2dModelId: activeModelId ?? null
         };
         const existing = chatConfigurations[activeChatId];
-        if (!existing || existing.systemPrompt !== currentConfig.systemPrompt || !areGenerationOptionsEqual(existing.generationOptions, currentConfig.generationOptions)) {
+        if (
+            !existing ||
+            existing.systemPrompt !== currentConfig.systemPrompt ||
+            !areGenerationOptionsEqual(existing.generationOptions, currentConfig.generationOptions) ||
+            existing.live2dModelId !== currentConfig.live2dModelId
+        ) {
             chatConfigurations = { ...chatConfigurations, [activeChatId]: currentConfig };
         }
     };
@@ -259,7 +278,8 @@
                     id,
                     {
                         systemPrompt: config.systemPrompt ?? '',
-                        generationOptions: cloneGenerationOptions(config.generationOptions)
+                        generationOptions: cloneGenerationOptions(config.generationOptions),
+                        live2dModelId: config.live2dModelId ?? null
                     }
                 ])
             );
@@ -329,9 +349,14 @@
                         ? persistedConfig.systemPrompt
                         : '';
                 const options = normalizeGenerationOptions(persistedConfig?.generationOptions);
+                const live2dModelId =
+                    persistedConfig && typeof persistedConfig.live2dModelId === 'string'
+                        ? persistedConfig.live2dModelId
+                        : null;
                 nextConfigurations[id] = {
                     systemPrompt: system,
-                    generationOptions: cloneGenerationOptions(options)
+                    generationOptions: cloneGenerationOptions(options),
+                    live2dModelId
                 };
             }
             chatConfigurations = nextConfigurations;
@@ -355,7 +380,7 @@
 
         const id = createChatId();
         const now = Date.now();
-        const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+        const initialMessages = sanitizeMessagesForStore([]);
         chatHistory = { ...chatHistory, [id]: initialMessages };
         const summary: ChatSummary = {
             id,
@@ -381,7 +406,7 @@
 
         const stored = chatHistory[id];
         if (!stored) {
-            const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+            const initialMessages = sanitizeMessagesForStore([]);
             chatHistory = { ...chatHistory, [id]: initialMessages };
             messages = cloneMessagesFromStore(initialMessages);
         } else {
@@ -440,6 +465,7 @@
     let activeModelId: string | null = null;
     let modelPreviewState: ModelPreviewState = { models: [], index: 0, current: null };
     const live2dDraftOriginals = new Map<string, ModelOption>();
+    const FALLBACK_LIVE2D_MODEL_IDS = ['builtin-huohuo', 'builtin-hiyori', 'builtin-miku'];
 
     const setActiveIndex = (index: number) => {
         if (!live2dModels.length) {
@@ -454,19 +480,56 @@
         activeModelId = live2dModels[normalized]?.id ?? null;
     };
 
+    const syncLive2DSelectionFromActiveId = (options?: { fallbackToDefault?: boolean }) => {
+        if (!live2dModels.length) return;
+        if (activeModelId) {
+            const index = live2dModels.findIndex((model) => model.id === activeModelId);
+            if (index === -1) {
+                if (!options?.fallbackToDefault) return;
+            } else {
+                if (index !== activeModelIndex) {
+                    setActiveIndex(index);
+                }
+                previewIndex = index;
+                return;
+            }
+        }
+
+        if (!options?.fallbackToDefault) return;
+
+        let nextIndex = -1;
+        for (const candidate of FALLBACK_LIVE2D_MODEL_IDS) {
+            const candidateIndex = live2dModels.findIndex((model) => model.id === candidate);
+            if (candidateIndex !== -1) {
+                nextIndex = candidateIndex;
+                break;
+            }
+        }
+
+        if (nextIndex === -1) {
+            nextIndex = live2dModels.length ? 0 : -1;
+        }
+
+        if (nextIndex !== -1) {
+            setActiveIndex(nextIndex);
+            previewIndex = nextIndex;
+        }
+    };
+
     function nextModel() {
         if (!live2dModels.length) return;
         const count = live2dModels.length;
-        previewIndex = (previewIndex + 1) % count;
+        const nextIndex = (previewIndex + 1) % count;
+        selectModel(nextIndex);
     }
 
     function prevModel() {
         if (!live2dModels.length) return;
         const count = live2dModels.length;
-        previewIndex = (previewIndex - 1 + count) % count;
+        const prevIndex = (previewIndex - 1 + count) % count;
+        selectModel(prevIndex);
     }
 
-    const FALLBACK_LIVE2D_MODEL_IDS = ['builtin-huohuo', 'builtin-hiyori', 'builtin-miku'];
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
     let providersError: string | null = null;
@@ -560,6 +623,7 @@
         const model = event.detail;
         activeModelId = model.id;
         await loadLive2DModels();
+        persistActiveChatConfig();
     };
 
     const handleModelManagerUpdated = async (event: CustomEvent<ModelOption>) => {
@@ -568,6 +632,7 @@
             activeModelId = model.id;
         }
         await loadLive2DModels();
+        persistActiveChatConfig();
     };
 
     const handleModelManagerDeleted = async (event: CustomEvent<string>) => {
@@ -576,6 +641,7 @@
             activeModelId = null;
         }
         await loadLive2DModels();
+        persistActiveChatConfig();
     };
 
     const handleModelManagerDraft = (event: CustomEvent<ModelOption | null>) => {
@@ -613,16 +679,7 @@
         }
     };
 
-    const createInitialBotMessage = (): Message => ({
-        id: createMessageId(),
-        sender: 'bot',
-        text: 'Hi there! How can I help you today?',
-        raw: 'Hi there! How can I help you today?',
-        hasThinking: false,
-        thinkingOpen: false
-    });
-
-    let messages: Message[] = [createInitialBotMessage()];
+    let messages: Message[] = [];
     let input = "";
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
@@ -698,6 +755,7 @@
         const normalized = ((index % count) + count) % count;
         setActiveIndex(normalized);
         previewIndex = normalized;
+        persistActiveChatConfig();
     };
 
     const toggleSidebar = () => {
@@ -941,6 +999,7 @@
             error = err instanceof Error ? err.message : 'An unexpected error occurred';
             messages = nextMessages;
             persistActiveChatMessages();
+            notifyApiError('Chat request failed', error);
         } finally {
             isSending = false;
             removePendingChat(chatId);
@@ -948,6 +1007,14 @@
     };
 
     const DEFAULT_TTS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
+
+    const notifyApiError = (title: string, description?: string) => {
+        toaster.error({
+            title,
+            description,
+            duration: 6000
+        });
+    };
 
     async function speakText(text: string) {
         const configuredVoiceId = currentModel?.voiceId ?? DEFAULT_TTS_VOICE_ID;
@@ -958,23 +1025,51 @@
             return;
         }
 
+        const speakableText = stripThinkingTags(text ?? '').trim();
+        if (!speakableText) {
+            console.warn('Skipping TTS: no speakable text');
+            return;
+        }
+
         try {
             const res = await fetch('/api/tts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, voiceId })
+                body: JSON.stringify({ text: speakableText, voiceId })
             });
             if (!res.ok) {
                 const payload = await res.json().catch(() => null);
                 console.error('TTS error', res.status, payload);
+                notifyApiError('Text-to-speech failed', payload?.error ?? 'Unable to generate speech');
                 return;
             }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
-            audio.onended = () => URL.revokeObjectURL(url);
-            await audio.play();
+
+            const releaseUrl = () => {
+                URL.revokeObjectURL(url);
+            };
+
+            const handleAudioError = () => {
+                releaseUrl();
+                void stopMouthTracking();
+            };
+
+            audio.addEventListener('ended', releaseUrl, { once: true });
+            audio.addEventListener('error', handleAudioError, { once: true });
+
+            try {
+                await trackMouthFromAudio(audio);
+                await audio.play();
+            } catch (playError) {
+                handleAudioError();
+                throw playError;
+            }
         } catch (e) {
+            void stopMouthTracking();
+            const message = e instanceof Error ? e.message : 'Unable to generate speech';
+            notifyApiError('Text-to-speech failed', message);
             console.error('speakText failed', e);
         }
     }
@@ -1000,7 +1095,7 @@
                         messages = cloneMessagesFromStore(storedMessages);
                         applyChatConfig(initialId);
                     } else {
-                        const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+                        const initialMessages = sanitizeMessagesForStore([]);
                         chatHistory = { ...chatHistory, [initialId]: initialMessages };
                         activeChatId = initialId;
                         messages = cloneMessagesFromStore(initialMessages);

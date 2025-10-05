@@ -1,6 +1,7 @@
 import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
+import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
 
 export interface ProviderMessage {
   role: 'system' | 'user' | 'assistant';
@@ -82,6 +83,18 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
 const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
   encoder.encode(`${JSON.stringify(event)}\n`);
 
+const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.`;
+
+const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
+  const alreadyPresent = history.some(
+    (message) => message.role === 'system' && message.content === SFU_TOOL_SYSTEM_PROMPT
+  );
+  if (alreadyPresent) {
+    return history;
+  }
+  return [{ role: 'system', content: SFU_TOOL_SYSTEM_PROMPT }, ...history];
+};
+
 export const streamProviderChat = async (
   provider: ProviderConfig,
   model: string,
@@ -89,9 +102,11 @@ export const streamProviderChat = async (
   systemPrompt: string | undefined,
   options: LLMGenerationOptions
 ): Promise<ReadableStream<Uint8Array>> => {
+  const normalizedHistory = provider.kind === 'ollama' ? prependToolInstruction(history) : history;
+
   switch (provider.kind) {
     case 'ollama':
-      return streamOllamaChat(provider, model, history, options);
+      return streamOllamaChat(provider, model, normalizedHistory, options);
     case 'gemini':
       return streamGeminiChat(provider, model, history, systemPrompt, options);
     default:
@@ -117,30 +132,90 @@ const listOllamaModels = async (provider: ProviderConfig): Promise<string[]> => 
   return uniqueSorted(models);
 };
 
-const streamOllamaChat = async (
-  provider: ProviderConfig,
-  model: string,
-  history: ProviderMessage[],
-  options: LLMGenerationOptions
-): Promise<ReadableStream<Uint8Array>> => {
-  const baseUrl = buildOllamaBaseUrl(provider);
-  const ollamaOptions = buildOllamaOptions(options);
-  const requestBody: Record<string, unknown> = {
-    model,
-    messages: history,
-    stream: true
-  };
+type OllamaRole = 'system' | 'user' | 'assistant' | 'tool';
 
-  if (Object.keys(ollamaOptions).length > 0) {
-    requestBody.options = ollamaOptions;
+interface OllamaFunctionCall {
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: unknown;
+  };
+}
+
+interface OllamaChatMessage {
+  role: OllamaRole;
+  content: string;
+  tool_calls?: OllamaFunctionCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+interface OllamaChatResponse {
+  message?: {
+    role?: string;
+    content?: unknown;
+    tool_calls?: OllamaFunctionCall[];
+  };
+  response?: string;
+  done?: boolean;
+  error?: unknown;
+}
+
+const resolveOllamaContent = (payload: OllamaChatResponse['message'], fallback?: string): string => {
+  if (!payload) {
+    return fallback ?? '';
   }
+
+  const { content } = payload;
+
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && 'text' in part && typeof (part as { text?: unknown }).text === 'string') {
+          return (part as { text?: string }).text ?? '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+    if (text.trim()) {
+      return text;
+    }
+  }
+
+  if (typeof fallback === 'string') {
+    return fallback;
+  }
+
+  return '';
+};
+
+const mapHistoryToOllamaMessages = (history: ProviderMessage[]): OllamaChatMessage[] =>
+  history.map((entry) => ({ role: entry.role, content: entry.content }));
+
+const callOllamaChat = async (
+  baseUrl: string,
+  requestBody: Record<string, unknown>,
+  emitDelta: ((chunk: string) => void) | null
+): Promise<{
+  content: string;
+  message: OllamaChatMessage | null;
+  toolCalls: OllamaFunctionCall[];
+}> => {
+  const payload = { ...requestBody, stream: true };
 
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -148,145 +223,220 @@ const streamOllamaChat = async (
     throw new Error(`Ollama request failed (${response.status}): ${errorText}`);
   }
 
-  if (!response.body) {
+  const body = response.body;
+  if (!body) {
     throw new Error('Ollama response missing body');
   }
 
-  const reader = response.body.getReader();
+  const reader = body.getReader();
   const decoder = new TextDecoder();
+  let buffer = '';
+  let accumulated = '';
+  let toolCalls: OllamaFunctionCall[] = [];
+  let finalMessage: OllamaChatMessage | null = null;
 
+  const flushLine = (line: string) => {
+    if (!line) return;
+
+    let data: OllamaChatResponse;
+    try {
+      data = JSON.parse(line) as OllamaChatResponse;
+    } catch {
+      return;
+    }
+
+    if (data?.error) {
+      throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+    }
+
+    const chunk = typeof data.message?.content === 'string'
+      ? data.message.content
+      : typeof data.response === 'string'
+        ? data.response
+        : '';
+
+    if (chunk) {
+      accumulated += chunk;
+      if (emitDelta) {
+        emitDelta(chunk);
+      }
+    }
+
+    if (Array.isArray(data.message?.tool_calls)) {
+      toolCalls = data.message?.tool_calls ?? [];
+    }
+
+    if (data.message) {
+      finalMessage = {
+        ...data.message,
+        content: typeof data.message.content === 'string'
+          ? data.message.content
+          : finalMessage?.content ?? ''
+      };
+    } else if (typeof data.response === 'string') {
+      finalMessage = {
+        role: 'assistant',
+        content: accumulated
+      };
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      } else if (done) {
+        buffer += decoder.decode();
+      }
+
+      let newlineIndex = buffer.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        flushLine(line);
+        newlineIndex = buffer.indexOf('\n');
+      }
+
+      if (done) {
+        const remainder = buffer.trim();
+        if (remainder) {
+          flushLine(remainder);
+        }
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const content = accumulated || finalMessage?.content || '';
+
+  return {
+    content,
+    message: finalMessage,
+    toolCalls
+  };
+};
+
+const handleToolCall = async (
+  call: OllamaFunctionCall,
+  iteration: number,
+  index: number
+): Promise<OllamaChatMessage> => {
+  const toolName = call?.function?.name ?? 'unknown_tool';
+  const toolCallId = call?.id ?? `${toolName}-${iteration}-${index}`;
+
+  if (!call?.function?.name) {
+    return {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: JSON.stringify({ ok: false, tool: toolName, error: 'Tool call missing function name.' })
+    };
+  }
+
+  try {
+    const result = await executeSfuOutlinesTool(toolName, call.function.arguments);
+    return {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: JSON.stringify({ ok: true, tool: toolName, data: result })
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown tool execution error';
+    return {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: JSON.stringify({ ok: false, tool: toolName, error: message })
+    };
+  }
+};
+
+const runOllamaChatWithTools = async (
+  provider: ProviderConfig,
+  model: string,
+  history: ProviderMessage[],
+  options: LLMGenerationOptions,
+  emitDelta: (chunk: string) => void
+): Promise<string> => {
+  const baseUrl = buildOllamaBaseUrl(provider);
+  const ollamaOptions = buildOllamaOptions(options);
+  const messages = mapHistoryToOllamaMessages(history);
+  const requestBase: Record<string, unknown> = {
+    model,
+    messages,
+    tools: SFU_OUTLINES_TOOLS
+  };
+
+  if (Object.keys(ollamaOptions).length > 0) {
+    requestBase.options = ollamaOptions;
+  }
+
+  const MAX_TOOL_ITERATIONS = 6;
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
+    requestBase.messages = messages;
+    const { content, message, toolCalls } = await callOllamaChat(baseUrl, requestBase, emitDelta);
+    const normalizedToolCalls = Array.isArray(toolCalls) ? toolCalls : [];
+    const assistantContent = content.length
+      ? content
+      : typeof message?.content === 'string'
+        ? message.content
+        : '';
+
+    if (normalizedToolCalls.length > 0) {
+      messages.push({
+        role: 'assistant',
+        content: assistantContent,
+        tool_calls: normalizedToolCalls
+      });
+
+      for (let index = 0; index < normalizedToolCalls.length; index += 1) {
+        const call = normalizedToolCalls[index];
+        const toolMessage = await handleToolCall(call, iteration, index);
+        messages.push(toolMessage);
+      }
+
+      continue;
+    }
+
+    const finalContent = assistantContent || resolveOllamaContent(message, undefined) || '';
+    messages.push({ role: 'assistant', content: finalContent });
+    return finalContent;
+  }
+
+  throw new Error('Tool execution exceeded maximum allowed iterations.');
+};
+
+const streamOllamaChat = async (
+  provider: ProviderConfig,
+  model: string,
+  history: ProviderMessage[],
+  options: LLMGenerationOptions
+): Promise<ReadableStream<Uint8Array>> => {
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
-      let buffer = '';
-      let aggregated = '';
-      let lastChunk = '';
-      let streamClosed = false;
+      let finalContent = '';
 
-      const send = (event: ChatStreamEvent) => {
-        if (!streamClosed) {
-          controller.enqueue(encodeEvent(encoder, event));
-        }
-      };
-
-      const closeWith = (event?: ChatStreamEvent) => {
-        if (!streamClosed) {
-          if (event) {
-            send(event);
-          }
-          streamClosed = true;
-          controller.close();
-        }
-      };
-
-      const processLine = (line: string): boolean => {
-        if (!line) return false;
-
-        const parsed = JSON.parse(line);
-
-        if (parsed?.error) {
-          const errorMessage = typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error);
-          throw new Error(errorMessage);
-        }
-
-        const content: string | undefined = parsed?.message?.content;
-        if (typeof content === 'string' && content.length) {
-          let delta = '';
-
-          if (content === lastChunk) {
-            delta = '';
-          } else if (content.startsWith(aggregated)) {
-            delta = content.slice(aggregated.length);
-            aggregated = content;
-          } else if (!aggregated) {
-            delta = content;
-            aggregated = content;
-          } else if (aggregated.startsWith(content)) {
-            delta = '';
-          } else {
-            delta = content;
-            aggregated += content;
-          }
-
-          lastChunk = content;
-
-          if (delta) {
-            send({ type: 'delta', value: delta });
-          }
-        }
-
-        if (parsed?.done) {
-          const finalResponse: string | undefined =
-            typeof parsed?.response === 'string' && parsed.response.length > 0
-              ? parsed.response
-              : typeof parsed?.message?.content === 'string' && parsed.message.content.length > 0
-                ? parsed.message.content
-                : undefined;
-
-          const resolved = finalResponse ?? aggregated;
-
-          if (finalResponse) {
-            aggregated = finalResponse;
-            lastChunk = finalResponse;
-          }
-
-          closeWith({ type: 'done', value: resolved });
-          return true;
-        }
-
-        return false;
+      const emitDelta = (chunk: string) => {
+        if (!chunk) return;
+        controller.enqueue(encodeEvent(encoder, { type: 'delta', value: chunk }));
       };
 
       try {
-        while (true) {
-          const { value, done } = await reader.read();
-
-          if (value) {
-            buffer += decoder.decode(value, { stream: !done });
-          } else if (done) {
-            buffer += decoder.decode();
-          }
-
-          let newlineIndex = buffer.indexOf('\n');
-          while (newlineIndex !== -1) {
-            const line = buffer.slice(0, newlineIndex).trim();
-            buffer = buffer.slice(newlineIndex + 1);
-
-            const shouldBreak = processLine(line);
-            if (shouldBreak) {
-              await reader.cancel().catch(() => undefined);
-              return;
-            }
-
-            newlineIndex = buffer.indexOf('\n');
-          }
-
-          if (done) {
-            const remainder = buffer.trim();
-            if (remainder) {
-              const shouldBreak = processLine(remainder);
-              if (shouldBreak) {
-                await reader.cancel().catch(() => undefined);
-                return;
-              }
-            }
-            break;
-          }
-        }
-
-        if (!streamClosed) {
-          closeWith({ type: 'done', value: aggregated });
-        }
+        finalContent = await runOllamaChatWithTools(provider, model, history, options, emitDelta);
+        controller.enqueue(encodeEvent(encoder, { type: 'done', value: finalContent }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown streaming error';
-        send({ type: 'error', message });
-        streamClosed = true;
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        controller.enqueue(encodeEvent(encoder, { type: 'error', message }));
+      } finally {
         controller.close();
-        await reader.cancel().catch(() => undefined);
       }
-    },
-    async cancel() {
-      await reader.cancel().catch(() => undefined);
     }
   });
 };

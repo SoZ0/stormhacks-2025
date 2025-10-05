@@ -2,6 +2,9 @@ import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 import { getStoredSettings } from '$lib/server/settingsStore';
+import { Readable } from 'node:stream';
+
+const textEncoder = new TextEncoder();
 
 const missingKeyResponse = () =>
   new Response(
@@ -26,6 +29,46 @@ const arrayBufferFromView = (view: ArrayBufferView | Uint8Array): ArrayBuffer =>
   const copy = new Uint8Array(slice.length);
   copy.set(slice);
   return copy.buffer;
+};
+
+const isWebReadableStream = (
+  value: unknown
+): value is ReadableStream<Uint8Array> =>
+  Boolean(value && typeof value === 'object' && typeof (value as { getReader?: unknown }).getReader === 'function');
+
+const isNodeReadableStream = (value: unknown): value is Readable => value instanceof Readable;
+
+const arrayBufferFromWebStream = async (stream: ReadableStream<Uint8Array>): Promise<ArrayBuffer> => {
+  const response = new Response(stream);
+  return response.arrayBuffer();
+};
+
+const arrayBufferFromNodeStream = async (stream: Readable): Promise<ArrayBuffer> => {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    if (typeof chunk === 'string') {
+      chunks.push(textEncoder.encode(chunk));
+    } else if (chunk instanceof Uint8Array) {
+      chunks.push(chunk);
+    } else if (chunk instanceof ArrayBuffer) {
+      chunks.push(new Uint8Array(chunk));
+    } else if (ArrayBuffer.isView(chunk)) {
+      chunks.push(new Uint8Array(arrayBufferFromView(chunk as ArrayBufferView)));
+    } else {
+      const arrayLike = chunk as ArrayLike<number> | Iterable<number>;
+      chunks.push(Uint8Array.from(arrayLike));
+    }
+  }
+
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return merged.buffer;
 };
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
@@ -75,6 +118,10 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
       bodyData = sdkRes;
     } else if (ArrayBuffer.isView(sdkRes)) {
       bodyData = arrayBufferFromView(sdkRes as ArrayBufferView);
+    } else if (isWebReadableStream(sdkRes)) {
+      bodyData = await arrayBufferFromWebStream(sdkRes);
+    } else if (isNodeReadableStream(sdkRes)) {
+      bodyData = await arrayBufferFromNodeStream(sdkRes);
     } else {
       throw new Error('Unexpected ElevenLabs response type.');
     }

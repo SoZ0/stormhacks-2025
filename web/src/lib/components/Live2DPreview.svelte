@@ -14,7 +14,7 @@
 </script>
 
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
     import { browser } from '$app/environment';
     import { base } from '$app/paths';
     import { Application, type IApplicationOptions } from 'pixi.js';
@@ -22,6 +22,7 @@
     import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
     import { getLocalModelBundle } from '$lib/live2d/client';
     import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
+    import { mouthOpen } from '$lib/live2d/mouth';
 
 	interface Live2DWindow extends Window {
 		Live2DCubismCore?: unknown;
@@ -102,6 +103,18 @@ export let loading = false;
 	let scaleMultiplier = DEFAULT_SCALE_MULTIPLIER;
 	let resolvedModelUrl = staticPathFor(DEFAULT_MODEL_PATH);
 	let resolvedCubismCoreSrc = staticPathFor(DEFAULT_CUBISM_CORE_PATH);
+	let targetMouthOpen = 0;
+	let currentMouthOpen = 0;
+	let mouthParamAvailable = false;
+	let mouthFormAvailable = false;
+	let mouthParamErrorLogged = false;
+	let mouthFormErrorLogged = false;
+
+	const unsubscribeMouth = browser
+		? mouthOpen.subscribe((value) => {
+				targetMouthOpen = clamp(value, 0, 1);
+			})
+		: () => {};
 
 	let localBundle: LocalModelAssetBundle | null = null;
 	let sourceToken = 0;
@@ -224,6 +237,46 @@ export let loading = false;
 		model.destroy();
 		model = null;
 		updateLayoutFn = null;
+		mouthParamAvailable = false;
+		mouthFormAvailable = false;
+		mouthParamErrorLogged = false;
+		mouthFormErrorLogged = false;
+	};
+
+	const refreshMouthParameterSupport = () => {
+		const coreModel = model?.internalModel?.coreModel as
+			| {
+				getParameterIndex?: (id: string) => number;
+				setParameterValueById?: (id: string, value: number) => void;
+			}
+			| undefined;
+
+		if (!coreModel || typeof coreModel.setParameterValueById !== 'function') {
+			mouthParamAvailable = false;
+			mouthFormAvailable = false;
+			return;
+		}
+
+		const canLookup = typeof coreModel.getParameterIndex === 'function';
+		if (canLookup) {
+			try {
+				mouthParamAvailable = (coreModel.getParameterIndex!('ParamMouthOpenY') ?? -1) >= 0;
+			} catch {
+				mouthParamAvailable = false;
+			}
+
+			try {
+				mouthFormAvailable = (coreModel.getParameterIndex!('ParamMouthForm') ?? -1) >= 0;
+			} catch {
+				mouthFormAvailable = false;
+			}
+		} else {
+			mouthParamAvailable = true;
+			mouthFormAvailable = true;
+		}
+
+		mouthParamErrorLogged = false;
+		mouthFormErrorLogged = false;
 	};
 
 	const applyLayout = () => {
@@ -305,6 +358,7 @@ export let loading = false;
 			model.anchor.set(clamp(anchorX, 0, 1), clamp(anchorY, 0, 1));
 			model.update(0);
 			applyLayout();
+			refreshMouthParameterSupport();
 
             expressions = await exprNames(model, modelUrl);
             const def = expressions[0];
@@ -383,6 +437,44 @@ export let loading = false;
 			const ticker = currentApp.ticker ?? Ticker.shared;
 			const tick = () => {
 				if (!model) return;
+				const smoothing = 0.25;
+				currentMouthOpen += (targetMouthOpen - currentMouthOpen) * smoothing;
+				if (Math.abs(targetMouthOpen) < 0.001 && Math.abs(currentMouthOpen) < 0.002) {
+					currentMouthOpen = 0;
+				}
+
+				const coreModel = model.internalModel?.coreModel as
+					| {
+						setParameterValueById?: (id: string, value: number) => void;
+					}
+					| undefined;
+
+				if (coreModel && typeof coreModel.setParameterValueById === 'function') {
+					const value = clamp(currentMouthOpen, 0, 1);
+					if (mouthParamAvailable) {
+						try {
+							coreModel.setParameterValueById('ParamMouthOpenY', value);
+						} catch (error) {
+							mouthParamAvailable = false;
+							if (!mouthParamErrorLogged) {
+								mouthParamErrorLogged = true;
+								console.warn('Live2DPreview: ParamMouthOpenY unavailable for mouth animation', error);
+							}
+						}
+					}
+
+					if (mouthFormAvailable) {
+						try {
+							coreModel.setParameterValueById('ParamMouthForm', 0.5);
+						} catch (error) {
+							mouthFormAvailable = false;
+							if (!mouthFormErrorLogged) {
+								mouthFormErrorLogged = true;
+								console.warn('Live2DPreview: ParamMouthForm unavailable for mouth animation', error);
+							}
+						}
+					}
+				}
 				model.update(ticker.deltaMS);
 			};
 
@@ -409,6 +501,10 @@ export let loading = false;
 			loading = false;
 			cleanupLocalBundle();
 		};
+	});
+
+	onDestroy(() => {
+		unsubscribeMouth();
 	});
 </script>
 

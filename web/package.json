@@ -21,6 +21,7 @@
 		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.1.14",
 		"@types/adm-zip": "^0.5.7",
+		"@types/sanitize-html": "^2.16.0",
 		"eslint": "^9.37.0",
 		"eslint-plugin-svelte": "^3.12.4",
 		"globals": "^16.4.0",
@@ -33,13 +34,15 @@
 		"vite": "^7.1.9"
 	},
 	"dependencies": {
-		"adm-zip": "^0.5.16",
 		"@elevenlabs/elevenlabs-js": "^2.17.0",
+		"adm-zip": "^0.5.16",
 		"fflate": "^0.8.2",
 		"idb": "^7.1.1",
 		"live2dcubismcore": "^1.0.2",
+		"marked": "^16.3.0",
 		"pixi-live2d-display": "^0.4.0",
 		"pixi.js": "6.5.10",
+		"sanitize-html": "^2.17.0",
 		"skeleton": "^1.0.1"
 	}
 }
