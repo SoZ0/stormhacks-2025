@@ -50,8 +50,8 @@ const createAudioTracker = (audio: HTMLMediaElement) => {
   const analyser = context.createAnalyser();
   const silentGain = context.createGain();
 
-  analyser.fftSize = 2048;
-  analyser.smoothingTimeConstant = 0.3;
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.18;
 
   source.connect(analyser);
   silentGain.gain.value = 0;
@@ -62,6 +62,11 @@ const createAudioTracker = (audio: HTMLMediaElement) => {
   const data = new Uint8Array(analyser.fftSize);
   let raf = 0;
   let disposed = false;
+
+  const RMS_BASELINE = 0.02;
+  const RMS_RANGE = 0.12;
+  const RESPONSE_EXPONENT = 1.15;
+  const AMPLITUDE_GAIN = 1.35;
 
   const update = () => {
     if (disposed) return;
@@ -75,7 +80,9 @@ const createAudioTracker = (audio: HTMLMediaElement) => {
     }
 
     const rms = Math.sqrt(sumSquares / data.length);
-    const normalized = clamp01((rms - 0.05) / 0.4);
+    const linear = Math.max(0, (rms - RMS_BASELINE) / RMS_RANGE);
+    const curved = Math.pow(linear, RESPONSE_EXPONENT) * AMPLITUDE_GAIN;
+    const normalized = clamp01(curved);
 
     mouthOpenStore.set(normalized);
 

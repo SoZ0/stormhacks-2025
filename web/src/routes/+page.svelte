@@ -53,6 +53,7 @@
         thinkingOpenStates?: boolean[];
         streaming?: boolean;
         audio?: MessageAudioPayload | null;
+        audioStatus?: 'idle' | 'loading' | 'playing';
     }
 
     interface ThinkingTogglePayload {
@@ -265,7 +266,8 @@
         const sanitized: Message = {
             ...message,
             id,
-            streaming: false
+            streaming: false,
+            audioStatus: 'idle'
         };
 
         applyThinkingBlocks(sanitized, thinkingBlocks, { defaultOpen: false });
@@ -930,6 +932,15 @@
     ) => {
         void replayMessageAudio(event.detail.messageId, event.detail.messageIndex);
     };
+
+    const handleMessageAudioStop = (
+        event: CustomEvent<{ messageId?: string; messageIndex: number }>
+    ) => {
+        const target = event.detail.messageId
+            ? event.detail.messageId
+            : messages[event.detail.messageIndex]?.id;
+        stopMessageAudio(target);
+    };
     let input = "";
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
@@ -1157,7 +1168,8 @@
             text: trimmed,
             raw: trimmed,
             hasThinking: false,
-            thinkingOpen: false
+            thinkingOpen: false,
+            audioStatus: 'idle'
         };
 
         const nextMessages: Message[] = [...messages, userMessage];
@@ -1184,16 +1196,17 @@
         persistActiveChatMessages();
 
         const streamAttempt = async (useTools: boolean) => {
-            const assistantMessage: Message = {
-                id: createMessageId(),
-                sender: 'bot',
-                text: '',
-                raw: '',
-                streaming: true,
-                hasThinking: false,
-                thinkingOpen: true,
-                thinkingOpenStates: []
-            };
+        const assistantMessage: Message = {
+            id: createMessageId(),
+            sender: 'bot',
+            text: '',
+            raw: '',
+            streaming: true,
+            hasThinking: false,
+            thinkingOpen: true,
+            thinkingOpenStates: [],
+            audioStatus: 'idle'
+        };
 
             messages = [...nextMessages, assistantMessage];
 
@@ -1326,8 +1339,14 @@
     let activeAudio: HTMLAudioElement | null = null;
     let activeAudioCleanup: (() => void) | null = null;
     let activeAudioMessageId: string | null = null;
+    let activeAudioFinalize: ((notification?: { title: string; description: string }) => void) | null = null;
 
     const cleanupActiveAudio = () => {
+        if (activeAudioFinalize) {
+            activeAudioFinalize();
+            return;
+        }
+
         if (activeAudio) {
             try {
                 activeAudio.pause();
@@ -1348,6 +1367,7 @@
         }
 
         activeAudioMessageId = null;
+        activeAudioFinalize = null;
     };
 
     const encodeArrayBufferToDataUrl = (buffer: ArrayBuffer, mimeType: string): string => {
@@ -1479,9 +1499,22 @@
         return null;
     };
 
+    const setAudioStatus = (messageId: string, status: Message['audioStatus']) => {
+        messages = messages.map((message) =>
+            message.id === messageId ? { ...message, audioStatus: status } : message
+        );
+        persistActiveChatMessages({ updateTimestamp: false });
+    };
+
     const playAudioSource = async (source: AudioSource, messageId: string) => {
-        cleanupActiveAudio();
-        void stopMouthTracking();
+        if (activeAudioFinalize) {
+            activeAudioFinalize();
+        } else {
+            cleanupActiveAudio();
+            void stopMouthTracking();
+        }
+
+        setAudioStatus(messageId, 'loading');
 
         const audio = new Audio();
         audio.preload = 'auto';
@@ -1501,17 +1534,58 @@
         }
 
         let notified = false;
+        let finalized = false;
 
-        const finalize = (notification?: { title: string; description: string }) => {
-            if (activeAudio === audio) {
-                cleanupActiveAudio();
-                void stopMouthTracking();
-            }
+        const clearPlaybackUrl = () => {
             if (revokeUrl) {
-                revokeUrl();
+                try {
+                    revokeUrl();
+                } catch (err) {
+                    console.warn('Failed to revoke audio URL', err);
+                }
                 revokeUrl = null;
             }
+        };
+
+        const finalize = (notification?: { title: string; description: string }) => {
+            if (finalized) return;
+            finalized = true;
+
             audio.removeEventListener('error', handleDecodeError);
+            audio.removeEventListener('ended', handleEnded);
+            audio.removeEventListener('pause', handlePause);
+
+            clearPlaybackUrl();
+
+            if (!audio.paused) {
+                try {
+                    audio.pause();
+                } catch (err) {
+                    console.warn('Audio pause failed', err);
+                }
+            }
+            audio.src = '';
+
+            if (activeAudioCleanup) {
+                try {
+                    activeAudioCleanup();
+                } catch (err) {
+                    console.warn('cleanupActiveAudio cleanup failed', err);
+                }
+                activeAudioCleanup = null;
+            }
+
+            if (activeAudio === audio) {
+                activeAudio = null;
+                activeAudioMessageId = null;
+            }
+
+            activeAudioFinalize = null;
+
+            setAudioStatus(messageId, 'idle');
+
+            void stopMouthTracking();
+
             if (notification && !notified) {
                 notified = true;
                 notifyApiError(notification.title, notification.description);
@@ -1522,16 +1596,20 @@
             finalize({ title: 'Playback failed', description: 'Unable to play generated audio.' });
         };
 
-        audio.addEventListener('ended', () => finalize(), { once: true });
+        const handleEnded = () => finalize();
+        const handlePause = () => {
+            if (!audio.ended) {
+                finalize();
+            }
+        };
+
+        audio.addEventListener('ended', handleEnded, { once: true });
+        audio.addEventListener('pause', handlePause);
 
         activeAudio = audio;
         activeAudioMessageId = messageId;
-        activeAudioCleanup = () => {
-            if (revokeUrl) {
-                revokeUrl();
-                revokeUrl = null;
-            }
-        };
+        activeAudioCleanup = clearPlaybackUrl;
+        activeAudioFinalize = finalize;
 
         try {
             audio.load();
@@ -1558,6 +1636,7 @@
 
         try {
             await audio.play();
+            setAudioStatus(messageId, 'playing');
         } catch (playError) {
             if (playError instanceof DOMException && playError.name === 'NotAllowedError') {
                 finalize({
@@ -1592,6 +1671,16 @@
         } catch (convertError) {
             console.error('Failed to decode audio for playback', convertError);
             notifyApiError('Playback failed', 'Unable to decode saved audio.');
+        }
+    };
+
+    const stopMessageAudio = (messageId: string | undefined) => {
+        if (!messageId) return;
+
+        if (activeAudioFinalize && activeAudioMessageId === messageId) {
+            activeAudioFinalize();
+        } else {
+            setAudioStatus(messageId, 'idle');
         }
     };
 
@@ -1861,6 +1950,7 @@
                             {messages}
                             on:thinkingToggle={handleMessageThinkingToggle}
                             on:playAudio={handleMessageAudioPlay}
+                            on:stopAudio={handleMessageAudioStop}
                         />
 
                         <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
