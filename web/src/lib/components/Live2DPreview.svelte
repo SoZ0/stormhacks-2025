@@ -8,6 +8,7 @@
         position?: { x?: number; y?: number };
         scaleMultiplier?: number;
         targetHeightRatio?: number;
+        idleAutoplayDelayMs?: number;
         storage?: Live2DModelStorage;
         localModelId?: string | null;
     };
@@ -20,6 +21,8 @@
 	import { Application, type IApplicationOptions } from 'pixi.js';
 	import { Ticker } from '@pixi/ticker';
 	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
+	import type { Live2DMotionOption } from '$lib/live2d/types';
+	import { DEFAULT_IDLE_AUTOPLAY_DELAY_MS } from '$lib/live2d/types';
 	import { getLocalModelBundle } from '$lib/live2d/client';
 	import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
 	import { mouthOpen } from '$lib/live2d/mouth';
@@ -59,28 +62,77 @@
 	let canvas: HTMLCanvasElement;
 	let app: Application | null = null;
 	let model: Live2DModelType | null = null;
-    export let expressions: string[] = [];
+	export let expressions: string[] = [];
+	export let motions: Live2DMotionOption[] = [];
 
-export function setExpression(name: string) {
-(model as any)?.expression?.(name);
-}
+	const motionMap = new Map<string, { group: string; index: number }>();
+	let currentMotionId: string | null = null;
+	let autoMotionQueued = false;
 
-const exprNames = async (m: any, url: string): Promise<string[]> => {
-const s = m?.internalModel?.settings || m?.internalModel?._settings || m?.settings;
-const pick = (arr: any[]) =>
-arr
-.map((e: any) => e?.Name || (e?.File && String(e.File).replace(/.exp3.json$/i, '')))
-.filter((n: any) => typeof n === 'string' && n.trim());
-const fromSettings = pick((s?.FileReferences?.Expressions ?? []) as any[]);
-if (fromSettings.length) return fromSettings;
-try {
-const j = await (await fetch(url, { cache: 'no-cache' })).json();
-return pick((j?.FileReferences?.Expressions ?? []) as any[]);
-} catch {
-return [];
-}
-};
+	export function setExpression(name: string) {
+		(model as any)?.expression?.(name);
+	}
 
+	export function playMotion(id: string): boolean {
+		if (!model) return false;
+
+		const entry = motionMap.get(id);
+		if (!entry) return false;
+
+		const anyModel: any = model;
+
+		try {
+			anyModel?.internalModel?.motionManager?.stopAllMotions?.();
+		} catch (error) {
+			console.warn('Live2DPreview: failed to stop motions', error);
+		}
+
+		if (typeof anyModel.motion !== 'function') return false;
+
+		const maybePromise = anyModel.motion(entry.group, entry.index) as Promise<unknown> | void;
+		currentMotionId = id;
+
+		if (maybePromise && typeof maybePromise.catch === 'function') {
+			maybePromise.catch((error: unknown) => {
+				if (currentMotionId === id) {
+					console.warn('Live2DPreview: failed to play motion', error);
+				}
+			});
+		}
+
+		scheduleIdle();
+		return true;
+	}
+
+	const scheduleMicrotask =
+		typeof queueMicrotask === 'function'
+			? queueMicrotask
+			: (callback: () => void) => {
+				void Promise.resolve().then(callback);
+			};
+
+	const exprNames = async (m: any, url: string): Promise<string[]> => {
+		const settings =
+			m?.internalModel?.settings || m?.internalModel?._settings || m?.settings;
+
+		const pick = (items: any[]) =>
+			items
+				.map((entry: any) =>
+					entry?.Name ||
+					(entry?.File && String(entry.File).replace(/\.exp3\.json$/i, '')))
+				.filter((value: any) => typeof value === 'string' && value.trim());
+
+		const settingsExpressions = pick((settings?.FileReferences?.Expressions ?? []) as any[]);
+		if (settingsExpressions.length) return settingsExpressions;
+
+		try {
+			const response = await fetch(url, { cache: 'no-cache' });
+			const json = await response.json();
+			return pick((json?.FileReferences?.Expressions ?? []) as any[]);
+		} catch {
+			return [];
+		}
+	};
 
 
 	const isAbsoluteUrl = (value: string) => /^https?:\/\//i.test(value) || value.startsWith('//');
@@ -129,6 +181,9 @@ export let loading = false;
 	let mouthFormAvailable = false;
 	let mouthParamErrorLogged = false;
 	let mouthFormErrorLogged = false;
+
+	let idleAutoplayDelayMs: number = DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
+	let idleTimer: number | null = null;
 
 	const unsubscribeMouth = browser
 		? mouthOpen.subscribe((value) => {
@@ -189,6 +244,7 @@ export let loading = false;
 	$: positionY = config?.position?.y ?? DEFAULT_POSITION.y;
 	$: targetHeightRatio = config?.targetHeightRatio ?? DEFAULT_TARGET_HEIGHT_RATIO;
 	$: scaleMultiplier = config?.scaleMultiplier ?? DEFAULT_SCALE_MULTIPLIER;
+    $: idleAutoplayDelayMs = (config?.idleAutoplayDelayMs ?? DEFAULT_IDLE_AUTOPLAY_DELAY_MS);
 
 	const ensureCubismCore = async (src: string) => {
 		if (typeof window === 'undefined') return;
@@ -256,6 +312,7 @@ export let loading = false;
 
 		model.destroy();
 		model = null;
+		clearIdleTimer();
 		updateLayoutFn = null;
 		mouthParamAvailable = false;
 		mouthFormAvailable = false;
@@ -340,6 +397,30 @@ export let loading = false;
 
 	let tickerRegistered = false;
 	let loadToken = 0;
+
+	const clearIdleTimer = () => {
+		if (idleTimer != null) {
+			clearTimeout(idleTimer);
+			idleTimer = null;
+		}
+	};
+
+	const scheduleIdle = () => {
+		clearIdleTimer();
+		const delay = Number.isFinite(idleAutoplayDelayMs) ? Math.max(0, idleAutoplayDelayMs) : DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
+		idleTimer = window.setTimeout(() => {
+			const anyModel: any = model as any;
+			try {
+				const settings = anyModel?.internalModel?._settings || anyModel?.internalModel?.settings;
+				const motionsDef = settings?.FileReferences?.Motions;
+				if (motionsDef?.Idle?.length && typeof anyModel.motion === 'function') {
+					anyModel.motion('Idle', 0).catch(console.warn);
+				}
+			} catch (e) {
+				console.warn('Live2DPreview: scheduled idle failed', e);
+			}
+		}, delay);
+	};
 	let inFlightModelConfig: ModelConfig | null = null;
 	let loadedModelConfig: ModelConfig | null = null;
 
@@ -385,6 +466,41 @@ export let loading = false;
             const def = expressions[0];
             if (def) (model as any)?.expression?.(def);
 			updateLayoutFn = applyLayout;
+			// Build motions list from settings
+			try {
+				motions = [];
+				motionMap.clear();
+				const anyModel: any = model as any;
+				const settings = anyModel?.internalModel?._settings || anyModel?.internalModel?.settings;
+				const motionsDef = settings?.FileReferences?.Motions;
+				if (motionsDef) {
+					for (const group of Object.keys(motionsDef)) {
+						const arr = motionsDef[group] || [];
+						arr.forEach((item: any, index: number) => {
+							const base = (item?.Name || item?.File || '').toString();
+							const label = base.replace(/^.*\//, '').replace(/\.motion3\.json$/i, '') || `${group} ${index+1}`;
+							const id = `${group}:${index}`;
+							motions.push({ id, label, group, index });
+							motionMap.set(id, { group, index });
+						});
+					}
+				}
+			} catch (e) { console.warn('Live2DPreview: failed to build motions list', e); }
+			// Auto-play Idle motion once and schedule next
+			try {
+				const anyModel: any = model as any;
+				const settings = anyModel?.internalModel?._settings || anyModel?.internalModel?.settings;
+				const motionsDef = settings?.FileReferences?.Motions;
+				if (motionsDef && motionsDef.Idle && motionsDef.Idle.length && typeof anyModel.motion === 'function') {
+					anyModel.motion('Idle', 0).catch(console.warn);
+					scheduleIdle();
+				} else {
+					clearIdleTimer();
+				}
+			} catch (e) {
+				console.warn('Live2DPreview: auto motion start failed', e);
+			}
+
 			loadedModelConfig = { modelUrl, coreSrc };
 		} catch (error) {
 			if (token === loadToken) {
@@ -539,3 +655,10 @@ export let loading = false;
 		Enable JavaScript to preview the Live2D model.
 	</noscript>
 </div>
+
+
+
+
+
+
+
