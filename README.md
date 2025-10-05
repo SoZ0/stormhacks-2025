@@ -1,6 +1,12 @@
-# StormHacks 2026
+# StormHacks 2025
 
-This repository contains the StormHacks 2026 client. The `web/` workspace holds the shared SvelteKit front end and the Tauri-powered desktop shell that compiles down to native binaries.
+[![tags: tailwind](https://img.shields.io/badge/tag-tailwind-blue)]()
+[![tags: css](https://img.shields.io/badge/tag-css-blue)]()
+[![tags: html](https://img.shields.io/badge/tag-html-orange)]()
+[![tags: ts](https://img.shields.io/badge/tag-typescript-blueviolet)]()
+[![tags: js](https://img.shields.io/badge/tag-javascript-yellow)]()
+
+This repository contains the StormHacks 2025 client. The `web/` workspace holds the shared SvelteKit front end and the Tauri-powered desktop shell that compiles down to native binaries.
 
 ## Directory layout
 - `web/` – SvelteKit app, build tooling, and the Tauri Rust crate
