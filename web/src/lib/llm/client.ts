@@ -42,6 +42,11 @@ interface ProviderSettingsResponse {
   error?: string;
 }
 
+interface ToolSupportResponse {
+  supported?: boolean;
+  error?: string;
+}
+
 const jsonOrNull = async <T>(response: Response) => {
   try {
     return (await response.json()) as T;
@@ -115,6 +120,24 @@ export const saveProviderSettings = async (
   ensureOk(response, await jsonOrNull<ProviderSettingsResponse>(response), 'Unable to save settings');
 };
 
+export const checkToolSupport = async (provider: ProviderId, model: string): Promise<boolean> => {
+  const response = await fetch('/api/tool-support', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model })
+  });
+
+  const data = await jsonOrNull<ToolSupportResponse>(response);
+  const supported = data?.supported;
+
+  if (!response.ok || typeof supported !== 'boolean') {
+    const message = data?.error ?? `Unable to determine tool support (${response.status})`;
+    throw new Error(message);
+  }
+
+  return supported;
+};
+
 const parseStreamLine = (line: string): ChatStreamEvent | null => {
   try {
     const parsed = JSON.parse(line);
@@ -136,12 +159,13 @@ export const streamChatMessage = async (
   systemPrompt: string,
   messages: ChatMessagePayload[],
   options: LLMGenerationOptions,
-  onEvent: (event: ChatStreamEvent) => void
+  onEvent: (event: ChatStreamEvent) => void,
+  toolsEnabled = true
 ): Promise<void> => {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model, systemPrompt, messages, options })
+    body: JSON.stringify({ provider, model, systemPrompt, messages, options, toolsEnabled })
   });
 
   if (!response.ok) {

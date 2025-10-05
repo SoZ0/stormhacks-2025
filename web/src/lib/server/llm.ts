@@ -100,17 +100,104 @@ export const streamProviderChat = async (
   model: string,
   history: ProviderMessage[],
   systemPrompt: string | undefined,
-  options: LLMGenerationOptions
+  options: LLMGenerationOptions,
+  enableTools = true
 ): Promise<ReadableStream<Uint8Array>> => {
-  const normalizedHistory = provider.kind === 'ollama' ? prependToolInstruction(history) : history;
+  const shouldUseTools = enableTools && provider.kind === 'ollama';
+  const normalizedHistory = shouldUseTools ? prependToolInstruction(history) : history;
 
   switch (provider.kind) {
     case 'ollama':
-      return streamOllamaChat(provider, model, normalizedHistory, options);
+      return streamOllamaChat(provider, model, normalizedHistory, options, shouldUseTools);
     case 'gemini':
       return streamGeminiChat(provider, model, history, systemPrompt, options);
     default:
       throw new Error(`Unsupported provider: ${provider.kind}`);
+  }
+};
+
+const checkOllamaToolSupport = async (provider: ProviderConfig, model: string): Promise<boolean> => {
+  const baseUrl = buildOllamaBaseUrl(provider);
+  const requestBody: Record<string, unknown> = {
+    model,
+    stream: false,
+    tools: SFU_OUTLINES_TOOLS,
+    messages: [
+      {
+        role: 'user',
+        content: ' '
+      }
+    ],
+    options: {
+      num_predict: 1
+    }
+  };
+
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  const raw = await response.text();
+
+  const containsToolUnsupported = (value: string | null | undefined) =>
+    typeof value === 'string' && value.toLowerCase().includes('does not support tools');
+
+  if (!response.ok) {
+    if (containsToolUnsupported(raw)) {
+      return false;
+    }
+    const message = raw?.trim() ? raw.trim() : 'Unknown error';
+    throw new Error(`Ollama tool support check failed (${response.status}): ${message}`);
+  }
+
+  if (!raw || !raw.trim()) {
+    return true;
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>;
+    const errorValue = record.error;
+    const errorMessage =
+      typeof errorValue === 'string'
+        ? errorValue
+        : errorValue && typeof errorValue === 'object' && 'message' in errorValue
+          ? ((errorValue as { message?: unknown }).message as string | undefined)
+          : undefined;
+
+    if (containsToolUnsupported(errorMessage)) {
+      return false;
+    }
+
+    if (errorMessage && errorMessage.trim()) {
+      throw new Error(errorMessage.trim());
+    }
+  }
+
+  return true;
+};
+
+export const checkProviderToolSupport = async (
+  provider: ProviderConfig,
+  model: string
+): Promise<boolean> => {
+  switch (provider.kind) {
+    case 'ollama':
+      return checkOllamaToolSupport(provider, model);
+    case 'gemini':
+      return false;
+    default:
+      return false;
   }
 };
 
@@ -156,18 +243,29 @@ interface OllamaChatResponse {
     role?: string;
     content?: unknown;
     tool_calls?: OllamaFunctionCall[];
+    tool_call_id?: string;
+    name?: string;
   };
   response?: string;
   done?: boolean;
   error?: unknown;
 }
 
-const resolveOllamaContent = (payload: OllamaChatResponse['message'], fallback?: string): string => {
+const isOllamaRole = (value: unknown): value is OllamaRole =>
+  value === 'system' || value === 'user' || value === 'assistant' || value === 'tool';
+
+const normalizeOllamaRole = (role: unknown, fallback: OllamaRole): OllamaRole =>
+  isOllamaRole(role) ? role : fallback;
+
+const resolveOllamaContent = (
+  payload: OllamaChatResponse['message'] | OllamaChatMessage | null | undefined,
+  fallback?: string
+): string => {
   if (!payload) {
     return fallback ?? '';
   }
 
-  const { content } = payload;
+  const { content } = payload as { content?: unknown };
 
   if (typeof content === 'string') {
     return content;
@@ -194,6 +292,38 @@ const resolveOllamaContent = (payload: OllamaChatResponse['message'], fallback?:
   }
 
   return '';
+};
+
+const normalizeOllamaMessage = (
+  message: OllamaChatResponse['message'] | null | undefined,
+  fallback: OllamaChatMessage | null
+): OllamaChatMessage | null => {
+  if (!message) return fallback;
+
+  const role = normalizeOllamaRole(message.role, fallback?.role ?? 'assistant');
+  const content = resolveOllamaContent(message, fallback?.content ?? '');
+  const normalized: OllamaChatMessage = { role, content };
+
+  const currentToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  if (currentToolCalls.length > 0) {
+    normalized.tool_calls = currentToolCalls;
+  } else if (fallback?.tool_calls?.length) {
+    normalized.tool_calls = fallback.tool_calls;
+  }
+
+  if (typeof message.tool_call_id === 'string') {
+    normalized.tool_call_id = message.tool_call_id;
+  } else if (fallback?.tool_call_id) {
+    normalized.tool_call_id = fallback.tool_call_id;
+  }
+
+  if (typeof message.name === 'string') {
+    normalized.name = message.name;
+  } else if (fallback?.name) {
+    normalized.name = fallback.name;
+  }
+
+  return normalized;
 };
 
 const mapHistoryToOllamaMessages = (history: ProviderMessage[]): OllamaChatMessage[] =>
@@ -234,6 +364,7 @@ const callOllamaChat = async (
   let accumulated = '';
   let toolCalls: OllamaFunctionCall[] = [];
   let finalMessage: OllamaChatMessage | null = null;
+  let lastMessageContent = '';
 
   const flushLine = (line: string) => {
     if (!line) return;
@@ -262,22 +393,16 @@ const callOllamaChat = async (
       }
     }
 
-    if (Array.isArray(data.message?.tool_calls)) {
-      toolCalls = data.message?.tool_calls ?? [];
-    }
-
     if (data.message) {
-      finalMessage = {
-        ...data.message,
-        content: typeof data.message.content === 'string'
-          ? data.message.content
-          : finalMessage?.content ?? ''
-      };
+      finalMessage = normalizeOllamaMessage(data.message, finalMessage);
+      toolCalls = finalMessage?.tool_calls ?? [];
+      lastMessageContent = finalMessage?.content ?? lastMessageContent;
     } else if (typeof data.response === 'string') {
       finalMessage = {
         role: 'assistant',
         content: accumulated
       };
+      lastMessageContent = finalMessage.content;
     }
   };
 
@@ -311,7 +436,7 @@ const callOllamaChat = async (
     reader.releaseLock();
   }
 
-  const content = accumulated || finalMessage?.content || '';
+  const content = accumulated || lastMessageContent;
 
   return {
     content,
@@ -356,24 +481,38 @@ const handleToolCall = async (
   }
 };
 
-const runOllamaChatWithTools = async (
+const runOllamaChat = async (
   provider: ProviderConfig,
   model: string,
   history: ProviderMessage[],
   options: LLMGenerationOptions,
-  emitDelta: (chunk: string) => void
+  emitDelta: (chunk: string) => void,
+  enableTools: boolean
 ): Promise<string> => {
   const baseUrl = buildOllamaBaseUrl(provider);
   const ollamaOptions = buildOllamaOptions(options);
   const messages = mapHistoryToOllamaMessages(history);
   const requestBase: Record<string, unknown> = {
     model,
-    messages,
-    tools: SFU_OUTLINES_TOOLS
+    messages
   };
 
   if (Object.keys(ollamaOptions).length > 0) {
     requestBase.options = ollamaOptions;
+  }
+
+  if (enableTools) {
+    requestBase.tools = SFU_OUTLINES_TOOLS;
+  }
+
+  if (!enableTools) {
+    const { content, message } = await callOllamaChat(baseUrl, requestBase, emitDelta);
+    const assistantContent = content.length
+      ? content
+      : typeof message?.content === 'string'
+        ? message.content
+        : resolveOllamaContent(message) ?? '';
+    return assistantContent;
   }
 
   const MAX_TOOL_ITERATIONS = 6;
@@ -404,7 +543,7 @@ const runOllamaChatWithTools = async (
       continue;
     }
 
-    const finalContent = assistantContent || resolveOllamaContent(message, undefined) || '';
+    const finalContent = assistantContent || resolveOllamaContent(message) || '';
     messages.push({ role: 'assistant', content: finalContent });
     return finalContent;
   }
@@ -416,7 +555,8 @@ const streamOllamaChat = async (
   provider: ProviderConfig,
   model: string,
   history: ProviderMessage[],
-  options: LLMGenerationOptions
+  options: LLMGenerationOptions,
+  enableTools: boolean
 ): Promise<ReadableStream<Uint8Array>> => {
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -429,7 +569,7 @@ const streamOllamaChat = async (
       };
 
       try {
-        finalContent = await runOllamaChatWithTools(provider, model, history, options, emitDelta);
+        finalContent = await runOllamaChat(provider, model, history, options, emitDelta, enableTools);
         controller.enqueue(encodeEvent(encoder, { type: 'done', value: finalContent }));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';

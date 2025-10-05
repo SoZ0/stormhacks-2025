@@ -48,9 +48,18 @@
 
 	export let providerState: ProviderSelectionState = EMPTY_PROVIDER_STATE;
 	export let modelState: ModelSelectionState = EMPTY_MODEL_STATE;
-	export let systemPrompt = '';
-	export let options: LLMGenerationOptions = { ...defaultGenerationOptions };
-	export let showPromptSettings = true;
+export let systemPrompt = '';
+export let options: LLMGenerationOptions = { ...defaultGenerationOptions };
+export let showPromptSettings = true;
+export let sfuToolsEnabled: boolean | null = null;
+export let sfuToolsChecking = false;
+	let toolSupportTooltip = '';
+
+	$: toolSupportTooltip = sfuToolsChecking
+		? 'Checking if the selected model supports tool calling…'
+		: sfuToolsEnabled
+			? 'Selected model supports tool calling.'
+			: 'Selected model does not support tool calling.';
 
 	const dispatch = createEventDispatcher<{
 		providerChange: ProviderId;
@@ -129,6 +138,31 @@
 			<p class="text-xs text-error-300">{modelState.error}</p>
 		{:else if !modelState.options.length}
 			<p class="text-xs text-surface-400/90">No models available for this provider.</p>
+		{/if}
+		{#if sfuToolsChecking || sfuToolsEnabled !== null}
+			{#if sfuToolsChecking}
+				<div
+					title={toolSupportTooltip}
+					class="inline-flex items-center gap-2 self-start rounded-full border border-amber-400/70 bg-amber-500/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-100"
+				>
+					<span class="h-2 w-2 animate-pulse rounded-full bg-amber-300 shadow-amber-300/60"></span>
+					<span>Checking Tool Support</span>
+				</div>
+			{:else}
+				<div
+					title={toolSupportTooltip}
+					class={`inline-flex items-center gap-2 self-start rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${
+						sfuToolsEnabled
+							? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-200'
+							: 'border-error-500/60 bg-error-500/15 text-error-100'
+					}`}
+				>
+					<span
+						class={`h-2 w-2 rounded-full ${sfuToolsEnabled ? 'bg-emerald-400 shadow-emerald-400/60' : 'bg-error-400 shadow-error-400/70'}`}
+					></span>
+					<span>{sfuToolsEnabled ? 'SFU API Enabled' : 'SFU API Disabled'}</span>
+				</div>
+			{/if}
 		{/if}
 	</div>
 

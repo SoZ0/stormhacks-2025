@@ -24,6 +24,20 @@ const hasArrayBuffer = (value: unknown): value is { arrayBuffer: () => Promise<A
       typeof (value as { arrayBuffer?: unknown }).arrayBuffer === 'function'
   );
 
+const isIterableNumber = (value: unknown): value is Iterable<number> =>
+  Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as Iterable<number>)[Symbol.iterator] === 'function'
+  );
+
+const isArrayLikeNumber = (value: unknown): value is ArrayLike<number> =>
+  Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as { length?: unknown }).length === 'number'
+  );
+
 const arrayBufferFromView = (view: ArrayBufferView | Uint8Array): ArrayBuffer => {
   const slice = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
   const copy = new Uint8Array(slice.length);
@@ -54,9 +68,12 @@ const arrayBufferFromNodeStream = async (stream: Readable): Promise<ArrayBuffer>
       chunks.push(new Uint8Array(chunk));
     } else if (ArrayBuffer.isView(chunk)) {
       chunks.push(new Uint8Array(arrayBufferFromView(chunk as ArrayBufferView)));
+    } else if (isArrayLikeNumber(chunk)) {
+      chunks.push(new Uint8Array(chunk));
+    } else if (isIterableNumber(chunk)) {
+      chunks.push(Uint8Array.from(chunk));
     } else {
-      const arrayLike = chunk as ArrayLike<number> | Iterable<number>;
-      chunks.push(Uint8Array.from(arrayLike));
+      throw new Error('Unsupported chunk type received from ElevenLabs stream.');
     }
   }
 

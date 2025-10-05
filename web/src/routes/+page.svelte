@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { onDestroy, onMount } from 'svelte';
     import { browser } from '$app/environment';
     import { resolve } from '$app/paths';
     import {
@@ -8,6 +8,7 @@
         fetchModels,
         saveProviderSettings,
         streamChatMessage,
+        checkToolSupport,
         type ChatMessagePayload,
         type ChatStreamEvent
     } from '$lib/llm/client';
@@ -34,13 +35,30 @@
     } from '$lib/llm/settings';
     import { toaster } from '$lib/stores/toaster';
 
+    interface MessageAudioPayload {
+        dataUrl: string;
+        mimeType: string;
+        voiceId: string;
+        createdAt: number;
+    }
+
     interface Message extends ChatMessagePayload {
         id: string;
         raw?: string;
         thinking?: string | null;
+        thinkingBlocks?: string[];
         hasThinking?: boolean;
         thinkingOpen?: boolean;
+        thinkingOpenStates?: boolean[];
         streaming?: boolean;
+        audio?: MessageAudioPayload | null;
+    }
+
+    interface ThinkingTogglePayload {
+        messageId?: string;
+        messageIndex: number;
+        blockIndex: number;
+        open: boolean;
     }
 
     const createMessageId = () => {
@@ -72,28 +90,46 @@
 
     const extractMessageParts = (
         raw: string
-    ): { text: string; thinking: string | null; hasThinking: boolean } => {
+    ): { text: string; thinking: string | null; thinkingBlocks: string[]; hasThinking: boolean } => {
         const openTag = '<think>';
         const closeTag = '</think>';
+        const visibleParts: string[] = [];
+        const thinkingBlocks: string[] = [];
 
-        const openIndex = raw.indexOf(openTag);
-        const closeIndex = raw.indexOf(closeTag);
+        let cursor = 0;
+        while (cursor < raw.length) {
+            const openIndex = raw.indexOf(openTag, cursor);
+            if (openIndex === -1) {
+                visibleParts.push(raw.slice(cursor));
+                break;
+            }
 
-        if (openIndex === -1) {
-            return { text: normalizeVisibleText(raw), thinking: null, hasThinking: false };
+            visibleParts.push(raw.slice(cursor, openIndex));
+            const start = openIndex + openTag.length;
+            const closeIndex = raw.indexOf(closeTag, start);
+
+            if (closeIndex === -1) {
+                const partial = raw.slice(start).trim();
+                if (partial) {
+                    thinkingBlocks.push(partial);
+                }
+                break;
+            }
+
+            const block = raw.slice(start, closeIndex).trim();
+            if (block) {
+                thinkingBlocks.push(block);
+            }
+            cursor = closeIndex + closeTag.length;
         }
 
-        if (closeIndex !== -1 && closeIndex > openIndex) {
-            const thinking = raw.slice(openIndex + openTag.length, closeIndex).trim();
-            const visibleBefore = raw.slice(0, openIndex);
-            const visibleAfter = raw.slice(closeIndex + closeTag.length);
-            const merged = normalizeVisibleText(`${visibleBefore}${visibleAfter}`);
-            return { text: merged, thinking: thinking || null, hasThinking: true };
-        }
-
-        const partialThinking = raw.slice(openIndex + openTag.length).trimStart();
-        const visible = normalizeVisibleText(raw.slice(0, openIndex));
-        return { text: visible, thinking: partialThinking || null, hasThinking: true };
+        const text = normalizeVisibleText(visibleParts.join(''));
+        return {
+            text,
+            thinking: thinkingBlocks[0] ?? null,
+            thinkingBlocks,
+            hasThinking: thinkingBlocks.length > 0
+        };
     };
 
     interface ChatConfig {
@@ -147,18 +183,99 @@
     let activeChatId = '';
     let pendingChatIds: string[] = [];
 
-    const sanitizeMessageForStore = (message: Message): Message => ({
-        ...message,
-        id: message.id ?? createMessageId(),
-        streaming: false,
-        thinkingOpen: message.hasThinking ? Boolean(message.thinkingOpen) : undefined
-    });
+    const resolveThinkingBlocks = (message: Message): string[] => {
+        if (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length) {
+            return message.thinkingBlocks.map((block) => block.trim()).filter(Boolean);
+        }
+        if (typeof message.thinking === 'string' && message.thinking.trim()) {
+            return [message.thinking.trim()];
+        }
+        if (typeof message.raw === 'string' && message.raw.includes('<think')) {
+            const { thinkingBlocks } = extractMessageParts(message.raw);
+            return thinkingBlocks;
+        }
+        return [];
+    };
+
+    const applyThinkingBlocks = (
+        message: Message,
+        thinkingBlocks: string[],
+        options: { defaultOpen: boolean; openStates?: boolean[] }
+    ) => {
+        const normalized = thinkingBlocks.map((block) => block.trim()).filter(Boolean);
+        if (!normalized.length) {
+            message.hasThinking = false;
+            message.thinking = null;
+            message.thinkingBlocks = undefined;
+            message.thinkingOpen = undefined;
+            message.thinkingOpenStates = undefined;
+            return;
+        }
+
+        const baseStates = Array.isArray(options.openStates)
+            ? options.openStates
+            : Array.isArray(message.thinkingOpenStates)
+                ? message.thinkingOpenStates
+                : typeof message.thinkingOpen === 'boolean'
+                    ? [message.thinkingOpen]
+                    : [];
+
+        const nextStates = normalized.map((_, index) =>
+            index < baseStates.length ? Boolean(baseStates[index]) : options.defaultOpen
+        );
+
+        message.hasThinking = true;
+        message.thinking = normalized[0] ?? null;
+        message.thinkingBlocks = [...normalized];
+        message.thinkingOpenStates = [...nextStates];
+        message.thinkingOpen = nextStates[0] ?? options.defaultOpen;
+    };
+
+    const snapshotOpenStates = (source?: Message): boolean[] | undefined => {
+        if (!source) return undefined;
+        if (Array.isArray(source.thinkingOpenStates)) {
+            return [...source.thinkingOpenStates];
+        }
+        if (typeof source.thinkingOpen === 'boolean') {
+            return [source.thinkingOpen];
+        }
+        return undefined;
+    };
+
+    const deriveThinkingOpenStates = (message: Message, blocks: string[]): boolean[] => {
+        if (!blocks.length) return [];
+        const existing = Array.isArray(message.thinkingOpenStates)
+            ? message.thinkingOpenStates
+            : [];
+        return blocks.map((_, index) => {
+            if (index < existing.length) {
+                return Boolean(existing[index]);
+            }
+            if (index === 0 && typeof message.thinkingOpen === 'boolean') {
+                return Boolean(message.thinkingOpen);
+            }
+            return false;
+        });
+    };
+
+    const sanitizeMessageForStore = (message: Message): Message => {
+        const id = message.id ?? createMessageId();
+        const thinkingBlocks = resolveThinkingBlocks(message);
+        const sanitized: Message = {
+            ...message,
+            id,
+            streaming: false
+        };
+
+        applyThinkingBlocks(sanitized, thinkingBlocks, { defaultOpen: false });
+        return sanitized;
+    };
 
     const sanitizeMessagesForStore = (list: Message[]): Message[] =>
-        list.map((message) => sanitizeMessageForStore(message));
+        list.map((message) => sanitizeMessageForStore({ ...message }));
 
     const cloneMessagesFromStore = (list: Message[]): Message[] =>
-        list.map((message) => ({ ...sanitizeMessageForStore(message) }));
+        list.map((message) => sanitizeMessageForStore({ ...message }));
 
     const deriveChatTitle = (list: Message[]): string => {
         const firstUser = list.find((msg) => msg.sender === 'user' && (msg.text ?? msg.raw)?.trim());
@@ -530,6 +647,28 @@
         selectModel(prevIndex);
     }
 
+    const modelSupportsSfuTools = (
+        provider: ProviderConfig | null,
+        modelId: string,
+        overrides: Partial<Record<ProviderId, Record<string, boolean>>>
+    ): boolean => {
+        if (!provider || !modelId.trim()) {
+            return false;
+        }
+
+        const providerOverrides = overrides[provider.id];
+        if (providerOverrides && modelId in providerOverrides) {
+            return providerOverrides[modelId] ?? false;
+        }
+
+        switch (provider.kind) {
+            case 'ollama':
+                return true;
+            default:
+                return false;
+        }
+    };
+
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
     let providersError: string | null = null;
@@ -544,6 +683,72 @@
     let isModelsLoading = false;
     let currentModelError: string | null = null;
     let currentModel: ModelOption | null = null;
+    let toolSupportOverrides: Partial<Record<ProviderId, Record<string, boolean>>> = {};
+    let toolSupportLoading: Partial<Record<ProviderId, Record<string, boolean>>> = {};
+
+    const setToolSupportLoading = (providerId: ProviderId, modelId: string, value: boolean) => {
+        if (!providerId || !modelId.trim()) return;
+
+        if (value) {
+            toolSupportLoading = {
+                ...toolSupportLoading,
+                [providerId]: {
+                    ...(toolSupportLoading[providerId] ?? {}),
+                    [modelId]: true
+                }
+            };
+            return;
+        }
+
+        const providerState = toolSupportLoading[providerId];
+        if (!providerState) return;
+
+        const nextState = { ...providerState };
+        delete nextState[modelId];
+
+        if (Object.keys(nextState).length === 0) {
+            const { [providerId]: _removed, ...rest } = toolSupportLoading;
+            toolSupportLoading = rest;
+        } else {
+            toolSupportLoading = { ...toolSupportLoading, [providerId]: nextState };
+        }
+    };
+
+    const recordToolSupport = (providerId: ProviderId, modelId: string, enabled: boolean) => {
+        if (!providerId || !modelId.trim()) return;
+
+        toolSupportOverrides = {
+            ...toolSupportOverrides,
+            [providerId]: {
+                ...(toolSupportOverrides[providerId] ?? {}),
+                [modelId]: enabled
+            }
+        };
+    };
+
+    const ensureToolSupportStatus = async (providerId: ProviderId, modelId: string) => {
+        if (!providerId || !modelId.trim()) return;
+
+        const existing = toolSupportOverrides[providerId]?.[modelId];
+        if (typeof existing === 'boolean') {
+            return;
+        }
+
+        if (toolSupportLoading[providerId]?.[modelId]) {
+            return;
+        }
+
+        setToolSupportLoading(providerId, modelId, true);
+
+        try {
+            const supported = await checkToolSupport(providerId, modelId);
+            recordToolSupport(providerId, modelId, supported);
+        } catch (err) {
+            console.error('Tool support check failed', err);
+        } finally {
+            setToolSupportLoading(providerId, modelId, false);
+        }
+    };
     let providerSelectionState: ProviderSelectionState = {
         options: providers,
         loading: providersLoading,
@@ -558,6 +763,9 @@
         selected: selectedModel,
         error: null
     };
+    let sfuToolsEnabled: boolean | null = null;
+    let sfuToolsChecking = false;
+    let toolSupportOverrideForSelection: boolean | undefined;
 
     let isCollapsed = false;
     let isSending = false;
@@ -680,6 +888,47 @@
     };
 
     let messages: Message[] = [];
+
+    const handleMessageThinkingToggle = (event: CustomEvent<ThinkingTogglePayload>) => {
+        const { messageId, messageIndex, blockIndex, open } = event.detail;
+        if (blockIndex < 0) return;
+
+        const targetIndex = messageId
+            ? messages.findIndex((message) => message.id === messageId)
+            : messageIndex;
+
+        if (targetIndex < 0 || targetIndex >= messages.length) return;
+
+        messages = messages.map((message, index) => {
+            if (index !== targetIndex) return message;
+
+            const blocks = message.thinkingBlocks?.length
+                ? [...message.thinkingBlocks]
+                : resolveThinkingBlocks(message);
+
+            if (!blocks.length || blockIndex >= blocks.length) return message;
+
+            const nextStates = deriveThinkingOpenStates(message, blocks);
+            nextStates[blockIndex] = open;
+
+            return {
+                ...message,
+                thinking: blocks[0] ?? null,
+                thinkingBlocks: [...blocks],
+                hasThinking: blocks.length > 0,
+                thinkingOpenStates: [...nextStates],
+                thinkingOpen: nextStates[0] ?? false
+            };
+        });
+
+        persistActiveChatMessages({ updateTimestamp: false });
+    };
+
+    const handleMessageAudioPlay = (
+        event: CustomEvent<{ messageId?: string; messageIndex: number }>
+    ) => {
+        void replayMessageAudio(event.detail.messageId, event.detail.messageIndex);
+    };
     let input = "";
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
@@ -888,6 +1137,14 @@
             return;
         }
 
+        const requestProviderId = selectedProviderId;
+        const requestModelId = selectedModel;
+        const shouldUseTools = modelSupportsSfuTools(
+            currentProvider,
+            requestModelId,
+            toolSupportOverrides
+        );
+
         if (!activeChatId) {
             createAndActivateChat({ preserveCurrent: false });
         }
@@ -925,7 +1182,7 @@
         );
         persistActiveChatMessages();
 
-        try {
+        const streamAttempt = async (useTools: boolean) => {
             const assistantMessage: Message = {
                 id: createMessageId(),
                 sender: 'bot',
@@ -933,7 +1190,8 @@
                 raw: '',
                 streaming: true,
                 hasThinking: false,
-                thinkingOpen: true
+                thinkingOpen: true,
+                thinkingOpenStates: []
             };
 
             messages = [...nextMessages, assistantMessage];
@@ -944,47 +1202,58 @@
                 );
             };
 
+            let markedToolSupportSuccess = false;
+
             await streamChatMessage(
-                selectedProviderId,
-                selectedModel,
+                requestProviderId,
+                requestModelId,
                 systemPrompt,
                 payload,
                 generationOptions,
                 (event: ChatStreamEvent) => {
                     if (event.type === 'delta' && event.value) {
                         assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
-                        const { text, thinking, hasThinking } = extractMessageParts(
+                        const { text, thinkingBlocks } = extractMessageParts(
                             assistantMessage.raw ?? ''
                         );
+                        const overrideOpenStates = snapshotOpenStates(
+                            messages.find((message) => message.id === assistantMessage.id)
+                        );
                         assistantMessage.text = text;
-                        assistantMessage.thinking = thinking;
-                        assistantMessage.hasThinking = hasThinking;
-                        assistantMessage.thinkingOpen = hasThinking
-                            ? assistantMessage.streaming !== false
-                                ? assistantMessage.thinkingOpen ?? true
-                                : assistantMessage.thinkingOpen ?? false
-                            : false;
+                        applyThinkingBlocks(assistantMessage, thinkingBlocks, {
+                            defaultOpen: assistantMessage.streaming !== false,
+                            openStates: overrideOpenStates
+                        });
                         updateAssistant(() => ({ ...assistantMessage }));
                     }
 
                     if (event.type === 'done') {
+                        if (!markedToolSupportSuccess && useTools) {
+                            recordToolSupport(requestProviderId, requestModelId, true);
+                            markedToolSupportSuccess = true;
+                        }
+
                         if (event.value && (!assistantMessage.raw || assistantMessage.raw !== event.value)) {
                             assistantMessage.raw = event.value;
                         }
 
                         const finalRaw = assistantMessage.raw ?? event.value ?? '';
-                        const { text, thinking, hasThinking } = extractMessageParts(finalRaw);
+                        const { text, thinkingBlocks, hasThinking } = extractMessageParts(finalRaw);
                         const fallbackVisible = text || (hasThinking ? stripThinkingTags(finalRaw) : finalRaw).trim();
+                        const overrideOpenStates = snapshotOpenStates(
+                            messages.find((message) => message.id === assistantMessage.id)
+                        );
                         assistantMessage.text = fallbackVisible;
-                        assistantMessage.thinking = thinking;
-                        assistantMessage.hasThinking = hasThinking;
+                        applyThinkingBlocks(assistantMessage, thinkingBlocks, {
+                            defaultOpen: false,
+                            openStates: overrideOpenStates
+                        });
                         assistantMessage.streaming = false;
-                        assistantMessage.thinkingOpen = hasThinking ? false : undefined;
                         updateAssistant(() => ({ ...assistantMessage }));
                         removePendingChat(chatId);
                         persistActiveChatMessages();
                         if (assistantMessage.text?.trim()) {
-                            speakText(assistantMessage.text);
+                            void speakText(assistantMessage);
                         } else {
                             console.warn('Skipping TTS: empty text');
                         }
@@ -993,13 +1262,45 @@
                     if (event.type === 'error') {
                         throw new Error(event.message ?? 'An unexpected error occurred');
                     }
-                }
+                },
+                useTools
             );
-        } catch (err) {
-            error = err instanceof Error ? err.message : 'An unexpected error occurred';
+        };
+
+        const handleStreamFailure = (message: string) => {
+            error = message;
             messages = nextMessages;
             persistActiveChatMessages();
             notifyApiError('Chat request failed', error);
+        };
+
+        try {
+            await streamAttempt(shouldUseTools);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+            const normalized = message.toLowerCase();
+            const toolUnsupported = shouldUseTools && normalized.includes('does not support tools');
+
+            if (toolUnsupported) {
+                recordToolSupport(requestProviderId, requestModelId, false);
+                messages = nextMessages;
+                persistActiveChatMessages();
+                error = null;
+
+                try {
+                    await streamAttempt(false);
+                    return;
+                } catch (fallbackErr) {
+                    const fallbackMessage =
+                        fallbackErr instanceof Error
+                            ? fallbackErr.message
+                            : 'An unexpected error occurred';
+                    handleStreamFailure(fallbackMessage);
+                    return;
+                }
+            }
+
+            handleStreamFailure(message);
         } finally {
             isSending = false;
             removePendingChat(chatId);
@@ -1016,7 +1317,99 @@
         });
     };
 
-    async function speakText(text: string) {
+    let activeAudio: HTMLAudioElement | null = null;
+    let activeAudioUrl: string | null = null;
+    let activeAudioMessageId: string | null = null;
+
+    const cleanupActiveAudio = () => {
+        if (activeAudio) {
+            activeAudio.pause();
+            activeAudio.src = '';
+            activeAudio = null;
+        }
+        if (activeAudioUrl) {
+            URL.revokeObjectURL(activeAudioUrl);
+            activeAudioUrl = null;
+        }
+        activeAudioMessageId = null;
+    };
+
+    const blobToDataUrl = async (blob: Blob): Promise<string> => {
+        const mimeType = blob.type || 'audio/mpeg';
+        const buffer = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode(...chunk);
+        }
+        const base64 = btoa(binary);
+        return `data:${mimeType};base64,${base64}`;
+    };
+
+    const updateMessageAudio = (messageId: string, payload: MessageAudioPayload | null) => {
+        messages = messages.map((message) =>
+            message.id === messageId ? { ...message, audio: payload ? { ...payload } : null } : message
+        );
+        persistActiveChatMessages({ updateTimestamp: false });
+    };
+
+    const findMessageForAudio = (messageId: string | undefined, messageIndex: number): Message | null => {
+        if (messageId) {
+            const byId = messages.find((message) => message.id === messageId);
+            if (byId) return byId;
+        }
+        if (messageIndex >= 0 && messageIndex < messages.length) {
+            return messages[messageIndex];
+        }
+        return null;
+    };
+
+    const replayMessageAudio = async (messageId: string | undefined, messageIndex: number) => {
+        const target = findMessageForAudio(messageId, messageIndex);
+        if (!target || !target.audio?.dataUrl) {
+            notifyApiError('Playback unavailable', 'No audio found for this message.');
+            return;
+        }
+
+        cleanupActiveAudio();
+        void stopMouthTracking();
+
+        const audio = new Audio(target.audio.dataUrl);
+        const handleFinalize = () => {
+            cleanupActiveAudio();
+            void stopMouthTracking();
+        };
+        const handleDecodeError = () => {
+            handleFinalize();
+            notifyApiError('Playback failed', 'Unable to play saved audio.');
+        };
+
+        audio.addEventListener('ended', handleFinalize, { once: true });
+        audio.addEventListener('error', handleDecodeError, { once: true });
+
+        activeAudio = audio;
+        activeAudioUrl = null;
+        activeAudioMessageId = target.id;
+
+        try {
+            await trackMouthFromAudio(audio);
+            await audio.play();
+        } catch (err) {
+            handleFinalize();
+            const message =
+                err instanceof DOMException && err.name === 'NotAllowedError'
+                    ? 'Playback was blocked. Please try again.'
+                    : err instanceof Error
+                        ? err.message
+                        : 'Unable to play audio.';
+            notifyApiError('Playback failed', message);
+            console.error('replayMessageAudio failed', err);
+        }
+    };
+
+    async function speakText(message: Message) {
         const configuredVoiceId = currentModel?.voiceId ?? DEFAULT_TTS_VOICE_ID;
         const voiceId = configuredVoiceId?.trim();
 
@@ -1025,7 +1418,7 @@
             return;
         }
 
-        const speakableText = stripThinkingTags(text ?? '').trim();
+        const speakableText = stripThinkingTags(message.text ?? message.raw ?? '').trim();
         if (!speakableText) {
             console.warn('Skipping TTS: no speakable text');
             return;
@@ -1043,33 +1436,58 @@
                 notifyApiError('Text-to-speech failed', payload?.error ?? 'Unable to generate speech');
                 return;
             }
+
             const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-
-            const releaseUrl = () => {
-                URL.revokeObjectURL(url);
+            const mimeType = blob.type || res.headers.get('Content-Type') || 'audio/mpeg';
+            const dataUrl = await blobToDataUrl(blob);
+            const audioPayload: MessageAudioPayload = {
+                dataUrl,
+                mimeType,
+                voiceId,
+                createdAt: Date.now()
             };
+            updateMessageAudio(message.id, audioPayload);
 
-            const handleAudioError = () => {
-                releaseUrl();
+            cleanupActiveAudio();
+            void stopMouthTracking();
+
+            const playbackUrl = URL.createObjectURL(blob);
+            const audio = new Audio(playbackUrl);
+
+            const handleFinalize = () => {
+                cleanupActiveAudio();
                 void stopMouthTracking();
             };
+            const handleDecodeError = () => {
+                handleFinalize();
+                notifyApiError('Playback failed', 'Unable to play generated audio.');
+            };
 
-            audio.addEventListener('ended', releaseUrl, { once: true });
-            audio.addEventListener('error', handleAudioError, { once: true });
+            audio.addEventListener('ended', handleFinalize, { once: true });
+            audio.addEventListener('error', handleDecodeError, { once: true });
+
+            activeAudio = audio;
+            activeAudioUrl = playbackUrl;
+            activeAudioMessageId = message.id;
 
             try {
                 await trackMouthFromAudio(audio);
                 await audio.play();
             } catch (playError) {
-                handleAudioError();
-                throw playError;
+                handleFinalize();
+                if (playError instanceof DOMException && playError.name === 'NotAllowedError') {
+                    notifyApiError('Playback blocked', 'Click the speaker icon on the message to listen.');
+                } else {
+                    const playbackMessage =
+                        playError instanceof Error ? playError.message : 'Unable to play audio.';
+                    notifyApiError('Playback failed', playbackMessage);
+                }
+                console.error('Audio playback failed', playError);
             }
         } catch (e) {
             void stopMouthTracking();
-            const message = e instanceof Error ? e.message : 'Unable to generate speech';
-            notifyApiError('Text-to-speech failed', message);
+            const messageError = e instanceof Error ? e.message : 'Unable to generate speech';
+            notifyApiError('Text-to-speech failed', messageError);
             console.error('speakText failed', e);
         }
     }
@@ -1120,6 +1538,11 @@
         })();
     });
 
+    onDestroy(() => {
+        cleanupActiveAudio();
+        void stopMouthTracking();
+    });
+
     $: if (!live2dModels.length) {
         activeModelIndex = 0;
         activeModelId = null;
@@ -1161,6 +1584,22 @@
         selected: selectedModel,
         error: currentModelError
     };
+    $: toolSupportOverrideForSelection = selectedProviderId && selectedModel
+        ? toolSupportOverrides[selectedProviderId]?.[selectedModel]
+        : undefined;
+    $: sfuToolsChecking = Boolean(
+        selectedProviderId && selectedModel
+            ? toolSupportLoading[selectedProviderId]?.[selectedModel]
+            : false
+    );
+    $: sfuToolsEnabled = selectedModel
+        ? typeof toolSupportOverrideForSelection === 'boolean'
+            ? toolSupportOverrideForSelection
+            : modelSupportsSfuTools(currentProvider, selectedModel, toolSupportOverrides)
+        : null;
+    $: if (selectedProviderId && selectedModel) {
+        void ensureToolSupportStatus(selectedProviderId, selectedModel);
+    }
     $: if (!isModelsLoading && availableModels.length > 0 && !availableModels.includes(selectedModel)) {
         selectedModel = availableModels[0];
     }
@@ -1247,24 +1686,29 @@
             <div class="flex h-full w-full flex-col gap-4 min-h-0">
                 <div class="flex h-full flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch">
                     <section class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
-                        <ChatMessages {messages} />
+                        <ChatMessages
+                            {messages}
+                            on:thinkingToggle={handleMessageThinkingToggle}
+                            on:playAudio={handleMessageAudioPlay}
+                        />
 
                         <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
                             <div class="flex flex-col gap-4">
-                        <ChatProviderControls
-                            providerState={providerSelectionState}
-                            modelState={modelSelectionState}
-                            systemPrompt={systemPrompt}
-                            options={generationOptions}
-                            showPromptSettings={false}
-                            on:providerChange={({ detail }) => {
-                                selectedProviderId = detail;
-                                void handleProviderChange(detail);
-                            }}
-                            on:modelChange={({ detail }) => (selectedModel = detail)}
-                            on:systemPromptChange={({ detail }) => updateSystemPrompt(detail)}
-                            on:optionsChange={({ detail }) => updateGenerationOptions(detail)}
-                        />
+                                <ChatProviderControls
+                                    providerState={providerSelectionState}
+                                    modelState={modelSelectionState}
+                                    sfuToolsEnabled={sfuToolsEnabled}
+                                    systemPrompt={systemPrompt}
+                                    options={generationOptions}
+                                    showPromptSettings={false}
+                                    on:providerChange={({ detail }) => {
+                                        selectedProviderId = detail;
+                                        void handleProviderChange(detail);
+                                    }}
+                                    on:modelChange={({ detail }) => (selectedModel = detail)}
+                                    on:systemPromptChange={({ detail }) => updateSystemPrompt(detail)}
+                                    on:optionsChange={({ detail }) => updateGenerationOptions(detail)}
+                                />
                                 <div class="flex flex-col gap-2 sm:flex-row xl:hidden">
                                     <button
                                         type="button"

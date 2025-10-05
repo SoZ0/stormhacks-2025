@@ -15,6 +15,7 @@ interface ChatRequestBody {
   messages: unknown;
   systemPrompt?: string;
   options?: unknown;
+  toolsEnabled?: unknown;
 }
 
 const toClientMessage = (value: unknown): ClientMessage | null => {
@@ -95,7 +96,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
     return json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { provider, model, messages, systemPrompt, options } = body ?? {};
+  const { provider, model, messages, systemPrompt, options, toolsEnabled } = body ?? {};
 
   if (!provider || typeof provider !== 'string') {
     return json({ error: 'provider is required' }, { status: 400 });
@@ -127,7 +128,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
       model,
       history,
       typeof systemPrompt === 'string' ? systemPrompt : undefined,
-      generationOptions
+      generationOptions,
+      toolsEnabled === undefined ? true : toolsEnabled === true
     );
     return new Response(stream, {
       headers: {

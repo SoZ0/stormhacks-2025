@@ -17,12 +17,32 @@
     import { onDestroy, onMount } from 'svelte';
     import { browser } from '$app/environment';
     import { base } from '$app/paths';
-    import { Application, type IApplicationOptions } from 'pixi.js';
-    import { Ticker } from '@pixi/ticker';
-    import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
-    import { getLocalModelBundle } from '$lib/live2d/client';
-    import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
-    import { mouthOpen } from '$lib/live2d/mouth';
+	import { Application, type IApplicationOptions } from 'pixi.js';
+	import { Ticker } from '@pixi/ticker';
+	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
+	import { getLocalModelBundle } from '$lib/live2d/client';
+	import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
+	import { mouthOpen } from '$lib/live2d/mouth';
+
+	let patchedPixiUrlResolve = false;
+	const ensurePixiUrlResolvePatched = async () => {
+		if (!browser || patchedPixiUrlResolve) return;
+		try {
+			const utils = await import('@pixi/utils');
+			const pixiUrl = utils?.url as { resolve?: (from: string, to: string) => string } | undefined;
+			if (!pixiUrl || typeof pixiUrl.resolve !== 'function') return;
+			const originalResolve = pixiUrl.resolve.bind(pixiUrl);
+			pixiUrl.resolve = (from: string, to: string) => {
+				if (typeof from === 'string' && from.startsWith('blob:') && typeof to === 'string' && to.startsWith('blob:')) {
+					return to;
+				}
+				return originalResolve(from, to);
+			};
+			patchedPixiUrlResolve = true;
+		} catch (error) {
+			console.warn('Live2DPreview: unable to patch pixi URL resolver', error);
+		}
+	};
 
 	interface Live2DWindow extends Window {
 		Live2DCubismCore?: unknown;
@@ -335,6 +355,7 @@ export let loading = false;
 		loading = true;
 
 		try {
+			await ensurePixiUrlResolvePatched();
 			await ensureCubismCore(coreSrc);
 			const { Live2DModel } = await import('pixi-live2d-display/cubism4');
 

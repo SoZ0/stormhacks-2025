@@ -5,7 +5,8 @@
     providerTemplates,
     type ProviderConfig,
     type ProviderId,
-    type ProviderKind
+    type ProviderKind,
+    type ProviderTemplate
   } from '$lib/llm/providers';
 
   let providers: ProviderConfig[] = [defaultProvider];
@@ -369,8 +370,11 @@
         : null
     );
 
-  const selectedTemplate = () =>
-    providerTemplates.find((template) => template.kind === newProviderKind) ?? providerTemplates[0];
+  let selectedProviderTemplate: ProviderTemplate | null = null;
+
+  $:
+    selectedProviderTemplate =
+      providerTemplates.find((template) => template.kind === newProviderKind) ?? providerTemplates[0] ?? null;
 
   const resolveFieldInputType = (type: string) => {
     switch (type) {
@@ -555,8 +559,8 @@
         />
       </div>
 
-      {#if selectedTemplate()}
-        {#each selectedTemplate().fields as field (field.name)}
+      {#if selectedProviderTemplate}
+        {#each selectedProviderTemplate.fields as field (field.name)}
           <div class="field">
             <label for={`provider-field-${field.name}`}>{field.label}</label>
             <input

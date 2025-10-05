@@ -421,7 +421,16 @@ const createBlobUrlFactory = () => {
       return urls.get(path) as string;
     }
 
-    const blob = new Blob([data], { type: guessMimeType(path) });
+    let buffer: ArrayBuffer;
+
+    if (data.buffer instanceof ArrayBuffer) {
+      buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    } else {
+      const clone = new Uint8Array(data);
+      buffer = clone.buffer;
+    }
+
+    const blob = new Blob([buffer], { type: guessMimeType(path) });
     const url = URL.createObjectURL(blob);
     urls.set(path, url);
     return url;
