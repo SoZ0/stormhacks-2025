@@ -119,3 +119,18 @@ The binary will be located at `web/src-tauri/target/release/stormhacks_desktop` 
 - Ensure the platform-specific dependencies from the Tauri docs are installed before running `bun run tauri:build`.
 - Delete `web/src-tauri/target` if you encounter stale bundle artefacts, then rebuild.
 - On Linux, export `WEBKIT_DISABLE_DMABUF_RENDERER=1` if WebKitGTK crashes while bundling.
+
+
+## Model Credits 
+Live2D showcase: https://youtu.be/8yMway8dHkg?si=ayFFE2AxBVf48_wE
+
+#スターレイル #honkaistarrail #藿藿 #星穹铁道
+Vtuber接單中
+Commissioning Open (Live2D Art/Rig)
+commission: https://forms.gle/fqGe4o3pqNZczYAY6
+bilibili: https://space.bilibili.com/27421812?s...
+twitter: https://twitter.com/Baily_ovo
+
+ART：伊白EX
+RIG：@Bailyovo @白狸Baily
+Live2DShowcase: @白狸Baily
