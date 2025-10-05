@@ -47,8 +47,8 @@
 		"vite": "^7.1.9"
 	},
 	"dependencies": {
-		"@tauri-apps/api": "^2.1.1",
 		"@elevenlabs/elevenlabs-js": "^2.17.0",
+		"@tauri-apps/api": "^2.1.1",
 		"adm-zip": "^0.5.16",
 		"fflate": "^0.8.2",
 		"idb": "^7.1.1",
@@ -57,6 +57,7 @@
 		"pixi-live2d-display": "^0.4.0",
 		"pixi.js": "6.5.10",
 		"sanitize-html": "^2.17.0",
-		"skeleton": "^1.0.1"
+		"skeleton": "^1.0.1",
+		"vosk-browser": "^0.0.8"
 	}
 }

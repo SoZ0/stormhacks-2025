@@ -131,6 +131,12 @@
 	let canvas: HTMLCanvasElement;
 	let app: Application | null = null;
 	let model: Live2DModelType | null = null;
+	let canvasVersion = 0;
+	let resizeObserver: ResizeObserver | null = null;
+	let currentTicker: Ticker | null = null;
+	let initializingApp = false;
+	let componentDestroyed = false;
+	let restartScheduled = false;
 	export let expressions: string[] = [];
 	export let motions: Live2DMotionOption[] = [];
 
@@ -371,8 +377,6 @@ export let loading = false;
 
 	let updateLayoutFn: (() => void) | null = null;
 	let contextLost = false;
-	let handleContextLost: ((event: Event) => void) | null = null;
-	let handleContextRestored: (() => void) | null = null;
 
 	const disposeModel = () => {
 		if (!model) return;
@@ -391,6 +395,63 @@ export let loading = false;
 		mouthFormAvailable = false;
 		mouthParamErrorLogged = false;
 		mouthFormErrorLogged = false;
+	};
+
+	const tick = () => {
+		if (!model) return;
+		const smoothing = 0.25;
+		currentMouthOpen += (targetMouthOpen - currentMouthOpen) * smoothing;
+		if (Math.abs(targetMouthOpen) < 0.001 && Math.abs(currentMouthOpen) < 0.002) {
+			currentMouthOpen = 0;
+		}
+
+		const coreModel = model.internalModel?.coreModel as
+			| {
+				setParameterValueById?: (id: string, value: number) => void;
+			}
+			| undefined;
+
+		if (coreModel && typeof coreModel.setParameterValueById === 'function') {
+			const value = clamp(currentMouthOpen, 0, 1);
+			if (mouthParamAvailable) {
+				try {
+					coreModel.setParameterValueById('ParamMouthOpenY', value);
+				} catch (error) {
+					mouthParamAvailable = false;
+					if (!mouthParamErrorLogged) {
+						mouthParamErrorLogged = true;
+						console.warn('Live2DPreview: ParamMouthOpenY unavailable for mouth animation', error);
+					}
+				}
+			}
+
+			if (mouthFormAvailable) {
+				try {
+					coreModel.setParameterValueById('ParamMouthForm', 0.5);
+				} catch (error) {
+					mouthFormAvailable = false;
+					if (!mouthFormErrorLogged) {
+						mouthFormErrorLogged = true;
+						console.warn('Live2DPreview: ParamMouthForm unavailable for mouth animation', error);
+					}
+				}
+			}
+		}
+
+		const deltaMs = currentTicker?.deltaMS ?? Ticker.shared.deltaMS;
+		model.update(deltaMs);
+	};
+
+	const detachTicker = () => {
+		if (currentTicker) {
+			currentTicker.remove(tick);
+			currentTicker = null;
+		}
+	};
+
+	const detachResizeObserver = () => {
+		resizeObserver?.disconnect();
+		resizeObserver = null;
 	};
 
 	const refreshMouthParameterSupport = () => {
@@ -456,6 +517,103 @@ export let loading = false;
 	$: if (model) {
 		model.anchor.set(clamp(anchorX, 0, 1), clamp(anchorY, 0, 1));
 		updateLayoutFn?.();
+	}
+
+	const onContextRestored = () => {
+		contextLost = false;
+	};
+
+	const onContextLost = (event: Event) => {
+		if (typeof (event as { preventDefault?: () => void }).preventDefault === 'function') {
+			(event as { preventDefault: () => void }).preventDefault();
+		}
+
+		if (restartScheduled || componentDestroyed) {
+			return;
+		}
+
+		restartScheduled = true;
+		loading = true;
+		contextLost = true;
+		loadToken += 1;
+		inFlightModelConfig = null;
+		loadedModelConfig = null;
+		detachTicker();
+		detachResizeObserver();
+		disposeModel();
+
+		const lostCanvas = canvas;
+		if (lostCanvas) {
+			lostCanvas.removeEventListener('webglcontextlost', onContextLost as EventListener);
+			lostCanvas.removeEventListener('webglcontextrestored', onContextRestored as EventListener);
+		}
+
+		if (app) {
+			app.destroy(false);
+			app = null;
+		}
+
+		scheduleMicrotask(() => {
+			if (!componentDestroyed) {
+				canvasVersion += 1;
+			}
+			restartScheduled = false;
+		});
+	};
+
+	const initializeApp = async () => {
+		if (!browser || componentDestroyed || initializingApp || app) return;
+		if (!container || !canvas) return;
+		initializingApp = true;
+		try {
+			ensurePixiExtensionsRegistered();
+			const options: Partial<IApplicationOptions> = {
+				backgroundAlpha: 0,
+				antialias: true,
+				autoStart: true,
+				autoDensity: true,
+				...pixiOptions,
+				view: canvas
+			};
+
+			if (!('resizeTo' in options) || options.resizeTo == null) {
+				options.resizeTo = container;
+			}
+
+			const newApp = new Application(options);
+			app = newApp;
+
+			const canvasElement = canvas;
+			canvasElement.addEventListener('webglcontextlost', onContextLost as EventListener, { passive: false });
+			canvasElement.addEventListener('webglcontextrestored', onContextRestored as EventListener);
+
+			detachResizeObserver();
+			resizeObserver = new ResizeObserver(() => applyLayout());
+			resizeObserver.observe(container);
+
+			const tickerInstance = newApp.ticker ?? Ticker.shared;
+			detachTicker();
+			currentTicker = tickerInstance;
+			currentTicker.add(tick);
+
+			contextLost = false;
+		} catch (error) {
+			console.error('Live2DPreview: failed to initialize PIXI application', error);
+		} finally {
+			initializingApp = false;
+		}
+	};
+
+	$: if (
+		browser &&
+		!componentDestroyed &&
+		!app &&
+		!initializingApp &&
+		!restartScheduled &&
+		container &&
+		canvas
+	) {
+		void initializeApp();
 	}
 
 	$: {
@@ -609,137 +767,24 @@ export let loading = false;
 	/* eslint-enable svelte/infinite-reactive-loop */
 
 	onMount(() => {
-		let destroyed = false;
-		let teardown: (() => void) | null = null;
-
-		const init = async () => {
-			if (!container || !canvas) return;
-			ensurePixiExtensionsRegistered();
-
-			const options: Partial<IApplicationOptions> = {
-				backgroundAlpha: 0,
-				antialias: true,
-				autoStart: true,
-				autoDensity: true,
-				...pixiOptions,
-				view: canvas
-			};
-
-			if (!('resizeTo' in options) || options.resizeTo == null) {
-				options.resizeTo = container;
-			}
-
-			app = new Application(options);
-			const currentApp = app;
-
-			if (destroyed) {
-				currentApp.destroy(true);
-				app = null;
-				return;
-			}
-
-			const canvasElement = canvas;
-			handleContextLost = (event: Event) => {
-				if (typeof (event as { preventDefault?: () => void }).preventDefault === 'function') {
-					(event as { preventDefault: () => void }).preventDefault();
-				}
-				contextLost = true;
-				loading = true;
-				loadToken += 1;
-				inFlightModelConfig = null;
-				loadedModelConfig = null;
-				disposeModel();
-			};
-			handleContextRestored = () => {
-				contextLost = false;
-				inFlightModelConfig = null;
-				loadedModelConfig = null;
-				if (currentApp && container && canvas) {
-					const desiredConfig: ModelConfig = {
-						modelUrl: resolvedModelUrl,
-						coreSrc: resolvedCubismCoreSrc
-					};
-					if (desiredConfig.modelUrl && desiredConfig.coreSrc) {
-						void reloadModel(desiredConfig.modelUrl, desiredConfig.coreSrc);
-					}
-				}
-			};
-			canvasElement.addEventListener('webglcontextlost', handleContextLost as EventListener, { passive: false });
-			canvasElement.addEventListener('webglcontextrestored', handleContextRestored as EventListener);
-
-			const resizeObserver = new ResizeObserver(() => applyLayout());
-			resizeObserver.observe(container);
-
-			const ticker = currentApp.ticker ?? Ticker.shared;
-			const tick = () => {
-				if (!model) return;
-				const smoothing = 0.25;
-				currentMouthOpen += (targetMouthOpen - currentMouthOpen) * smoothing;
-				if (Math.abs(targetMouthOpen) < 0.001 && Math.abs(currentMouthOpen) < 0.002) {
-					currentMouthOpen = 0;
-				}
-
-				const coreModel = model.internalModel?.coreModel as
-					| {
-						setParameterValueById?: (id: string, value: number) => void;
-					}
-					| undefined;
-
-				if (coreModel && typeof coreModel.setParameterValueById === 'function') {
-					const value = clamp(currentMouthOpen, 0, 1);
-					if (mouthParamAvailable) {
-						try {
-							coreModel.setParameterValueById('ParamMouthOpenY', value);
-						} catch (error) {
-							mouthParamAvailable = false;
-							if (!mouthParamErrorLogged) {
-								mouthParamErrorLogged = true;
-								console.warn('Live2DPreview: ParamMouthOpenY unavailable for mouth animation', error);
-							}
-						}
-					}
-
-					if (mouthFormAvailable) {
-						try {
-							coreModel.setParameterValueById('ParamMouthForm', 0.5);
-						} catch (error) {
-							mouthFormAvailable = false;
-							if (!mouthFormErrorLogged) {
-								mouthFormErrorLogged = true;
-								console.warn('Live2DPreview: ParamMouthForm unavailable for mouth animation', error);
-							}
-						}
-					}
-				}
-				model.update(ticker.deltaMS);
-			};
-
-			ticker.add(tick);
-
-			teardown = () => {
-				resizeObserver.disconnect();
-				ticker.remove(tick);
-				if (canvas && handleContextLost) {
-					canvas.removeEventListener('webglcontextlost', handleContextLost as EventListener);
-				}
-				if (canvas && handleContextRestored) {
-					canvas.removeEventListener('webglcontextrestored', handleContextRestored as EventListener);
-				}
-				handleContextLost = null;
-				handleContextRestored = null;
-				disposeModel();
-			};
-		};
-
-		void init();
+		componentDestroyed = false;
+		void initializeApp();
 
 		return () => {
-			destroyed = true;
-			teardown?.();
+			componentDestroyed = true;
+			restartScheduled = false;
 			loadToken += 1;
+			detachTicker();
+			detachResizeObserver();
+			if (canvas) {
+				canvas.removeEventListener('webglcontextlost', onContextLost as EventListener);
+				canvas.removeEventListener('webglcontextrestored', onContextRestored as EventListener);
+			}
 			disposeModel();
-			app?.destroy(true);
-			app = null;
+			if (app) {
+				app.destroy(false);
+				app = null;
+			}
 			inFlightModelConfig = null;
 			loadedModelConfig = null;
 			loading = false;
@@ -752,20 +797,16 @@ export let loading = false;
 	});
 </script>
 
+
 <div class="relative h-full w-full overflow-hidden" bind:this={container}>
-	<canvas
-		bind:this={canvas}
-		aria-label="Live2D preview"
-		class="absolute inset-0 h-full w-full"
-	></canvas>
+	{#key canvasVersion}
+		<canvas
+			bind:this={canvas}
+			aria-label="Live2D preview"
+			class="absolute inset-0 h-full w-full"
+		></canvas>
+	{/key}
 	<noscript class="absolute inset-x-0 bottom-4 mx-auto max-w-xs rounded-md bg-surface-900/90 px-3 py-2 text-center text-xs text-surface-100 shadow-lg">
 		Enable JavaScript to preview the Live2D model.
 	</noscript>
 </div>
-
-
-
-
-
-
-

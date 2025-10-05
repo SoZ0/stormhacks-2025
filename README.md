@@ -88,6 +88,16 @@ The binary will be located at `web/src-tauri/target/release/stormhacks_desktop` 
 - `bun run check` – Type-check the Svelte + TypeScript sources
 - `bun run lint` – Run static analysis and formatting checks
 
+## Offline speech recognition
+- Download a Vosk model archive (for English, grab `vosk-model-small-en-us-0.15.zip` from [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)).
+- Extract the zip locally, then repackage the folder as a gzipped tarball:
+  ```bash
+  unzip vosk-model-small-en-us-0.15.zip
+  tar -czf web/static/models/vosk-model-small-en-us-0.15.tar.gz vosk-model-small-en-us-0.15
+  ```
+- The desktop bundle (and dev server) will load the model from `web/static/models/vosk-model-small-en-us-0.15.tar.gz` by default. Adjust the location by setting `VITE_VOSK_MODEL_PATH` in `web/.env` to point at a different archive.
+- The first microphone activation may take a few seconds while the model is unpacked in WebAssembly. Subsequent sessions reuse the in-memory model—no network access is required once the archive is present.
+
 ## Troubleshooting
 - Ensure the platform-specific dependencies from the Tauri docs are installed before running `bun run tauri:build`.
 - Delete `web/src-tauri/target` if you encounter stale bundle artefacts, then rebuild.

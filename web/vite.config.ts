@@ -1,8 +1,22 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
 
-export default defineConfig(() => {
+const resolveBrowserPolyfill = (relative: string) =>
+	fileURLToPath(new URL(relative, import.meta.url));
+
+export default defineConfig(({ command, isSsrBuild }) => {
+	const isBrowserBuild = command === 'serve' || !isSsrBuild;
+	const alias = isBrowserBuild
+		? {
+			fs: resolveBrowserPolyfill('./src/lib/polyfills/fs.ts'),
+			'source-map-js': resolveBrowserPolyfill('./src/lib/polyfills/source-map-js.ts'),
+			path: 'path-browserify',
+			url: resolveBrowserPolyfill('./src/lib/polyfills/url.ts')
+		}
+		: undefined;
+	const optimizeDeps = isBrowserBuild ? { include: ['path-browserify'] } : undefined;
 	const isTauri = Boolean(
 		process.env.TAURI_PLATFORM ||
 		process.env.TAURI_ARCH ||
@@ -19,6 +33,10 @@ export default defineConfig(() => {
 		plugins: [tailwindcss(), sveltekit()],
 		base: isTauri ? './' : undefined,
 		clearScreen: false,
+		resolve: {
+			alias
+		},
+		optimizeDeps,
 		server: isTauri
 			? {
 				host: tauriDevHost,

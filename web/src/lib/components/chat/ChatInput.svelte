@@ -1,13 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from 'svelte';
+  import {
+    createOfflineSpeechController,
+    getDefaultModelPath,
+    isOfflineSpeechSupported,
+    OfflineSpeechError,
+    type OfflineSpeechController
+  } from '$lib/speech/offline';
   import type { ThinkingMode, ThinkingModeOption } from '$lib/chat/types';
-
-  declare global {
-    interface Window {
-      SpeechRecognition?: typeof SpeechRecognition;
-      webkitSpeechRecognition?: typeof SpeechRecognition;
-    }
-  }
 
   export let value = '';
   export let isSending = false;
@@ -33,13 +33,41 @@
   }>();
 
   let recognition: SpeechRecognition | null = null;
+  let offlineSpeech: OfflineSpeechController | null = null;
   let isListening = false;
   let speechSupported = false;
+  let browserSpeechSupported = false;
+  let offlineSpeechSupported = false;
   let micError: string | null = null;
   let shouldResume = false;
+  let usingOfflineSpeech = false;
+  let isLoadingSpeech = false;
+  const offlineModelPath = getDefaultModelPath();
+
+  const offlineCallbacks = {
+    onStart: () => {
+      micError = null;
+      isListening = true;
+      usingOfflineSpeech = true;
+    },
+    onStop: () => {
+      isListening = false;
+      usingOfflineSpeech = false;
+    },
+    onResult: (text: string) => {
+      value = appendTranscript(value, text);
+    },
+    onError: (error: OfflineSpeechError) => {
+      micError = error.message;
+    }
+  };
+
+  let stopPromise: Promise<void> | null = null;
 
   if (typeof window !== 'undefined') {
-    speechSupported = Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition);
+    browserSpeechSupported = Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition);
+    offlineSpeechSupported = isOfflineSpeechSupported();
+    speechSupported = browserSpeechSupported || offlineSpeechSupported;
   }
 
   const appendTranscript = (current: string, addition: string): string => {
@@ -118,10 +146,12 @@
     instance.onstart = () => {
       micError = null;
       isListening = true;
+      usingOfflineSpeech = false;
     };
 
     instance.onend = () => {
       isListening = false;
+      usingOfflineSpeech = false;
 
       if (shouldResume && !isSending && !isDisabled) {
         // Restart automatically to emulate a continuous session when supported.
@@ -176,35 +206,100 @@
     return recognition;
   };
 
-  const toggleSpeech = () => {
+  const ensureOfflineController = () => {
+    if (!offlineSpeech) {
+      offlineSpeech = createOfflineSpeechController(offlineCallbacks, {
+        modelUrl: offlineModelPath
+      });
+    }
+    return offlineSpeech;
+  };
+
+  const stopSpeech = async () => {
+    if (stopPromise) {
+      return stopPromise;
+    }
+
+    stopPromise = (async () => {
+      if (usingOfflineSpeech && offlineSpeech) {
+        await offlineSpeech.stop();
+        return;
+      }
+
+      if (recognition && isListening) {
+        shouldResume = false;
+        recognition.stop();
+      }
+    })();
+
+    try {
+      await stopPromise;
+    } finally {
+      stopPromise = null;
+    }
+  };
+
+  const toggleSpeech = async () => {
+    if (isListening) {
+      await stopSpeech();
+      return;
+    }
+
+    micError = null;
+
+    if (isSending || isDisabled) {
+      return;
+    }
+
+    if (offlineSpeechSupported) {
+      try {
+        isLoadingSpeech = true;
+        const controller = ensureOfflineController();
+        await controller.start();
+        return;
+      } catch (error) {
+        usingOfflineSpeech = false;
+        if (error instanceof OfflineSpeechError) {
+          micError = error.message;
+        } else {
+          const message = error instanceof Error ? error.message : 'Unable to start offline speech recognition.';
+          micError = message;
+        }
+        return;
+      } finally {
+        isLoadingSpeech = false;
+      }
+    }
+
     const instance = ensureRecognition();
     if (!instance) {
-      micError = 'Speech recognition is not supported in this browser.';
+      if (!micError) {
+        micError = 'Speech recognition is not supported in this browser.';
+      }
       return;
     }
 
     micError = null;
 
     try {
-      if (isListening) {
-        shouldResume = false;
-        instance.stop();
-      } else {
-        shouldResume = true;
-        instance.start();
-      }
+      shouldResume = true;
+      instance.start();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       micError = `Unable to access the microphone: ${message}`;
     }
   };
 
-  $: if ((isSending || isDisabled) && isListening && recognition) {
+  $: if ((isSending || isDisabled) && isListening) {
     shouldResume = false;
-    recognition.stop();
+    void stopSpeech();
   }
 
   onDestroy(() => {
+    void stopSpeech();
+    offlineSpeech?.destroy().catch((error) => {
+      console.error('Failed to destroy offline speech controller', error);
+    });
     if (!recognition) {
       return;
     }
@@ -263,13 +358,16 @@
 				? 'border-primary-500 bg-primary-500 text-[color:var(--color-primary-contrast-500)]'
 				: 'border-surface-700/60 text-primary-400 hover:bg-primary-500/10'
 		}`}
-		on:click={toggleSpeech}
-		disabled={isSending || isDisabled || !speechSupported}
+		on:click={() => void toggleSpeech()}
+		disabled={isSending || isDisabled || !speechSupported || isLoadingSpeech}
 		aria-pressed={isListening}
 		aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
 		aria-live="polite"
+		aria-busy={isLoadingSpeech}
 	>
-		{#if isListening}
+		{#if isLoadingSpeech}
+			<span class="animate-pulse">⌛</span>
+		{:else if isListening}
 			<span class="animate-pulse">🎙️</span>
 		{:else}
 			<span>🎤</span>
