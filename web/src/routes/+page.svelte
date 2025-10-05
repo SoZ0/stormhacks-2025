@@ -98,6 +98,10 @@
     let messages: Message[] = [initialBotMessage];
     let input = "";
 
+    let live2dRef;
+    let expressionOptions: string[] = [];
+    let selectedExpression = '';
+
     const loadProviders = async () => {
         providersLoading = true;
         providersError = null;
@@ -323,6 +327,17 @@
             persistSettings(selectedProviderId, selectedModel);
         }
     }
+
+    const DEFAULT_CORE_PATH = '/vendor/live2d/live2dcubismcore.min.js';
+
+    $: previewModel = demoModels[previewIndex] ?? demoModels[0];
+
+    $: if (expressionOptions.length && !expressionOptions.includes(selectedExpression)) {
+    selectedExpression = expressionOptions[0];
+    }
+    $: if (selectedExpression) {
+    live2dRef?.setExpression(selectedExpression);
+    }
 </script>
 		
 	
@@ -433,18 +448,21 @@
 
         <div class="flex w-1/3 h-full">
             <div class="absolute z-50 h-full right-0 w-1/3">
-                    <Live2DPreview
-                            modelPath={currentModel.modelPath}
-                            cubismCorePath={currentModel.cubismCorePath}
-                            scaleMultiplier={currentModel.scaleMultiplier ?? 1}
-                            targetHeightRatio={currentModel.targetHeightRatio ?? 0.9}
-                            anchorX={currentModel.anchor?.x ?? 0.5}
-                            anchorY={currentModel.anchor?.y ?? 0.5}
-                            positionX={currentModel.position?.x ?? 0.5}
-                            positionY={currentModel.position?.y ?? 0.95}
-                        />
-
-                        <!-- Model selector (bottom-centered under Live2D) -->
+                <Live2DPreview
+                bind:this={live2dRef}
+                bind:expressions={expressionOptions}
+                modelPath={previewModel.modelPath}
+                cubismCorePath={previewModel.cubismCorePath ?? DEFAULT_CORE_PATH}
+                scaleMultiplier={previewModel.scaleMultiplier ?? 1}
+                targetHeightRatio={previewModel.targetHeightRatio ?? 0.9}
+                anchorX={previewModel.anchor?.x ?? 0.5}
+                anchorY={previewModel.anchor?.y ?? 0.5}
+                positionX={previewModel.position?.x ?? 0.5}
+                positionY={previewModel.position?.y ?? 0.95}
+                />
+                <div class="expr"> <select bind:value={selectedExpression} on:change={() => live2dRef?.setExpression(selectedExpression)} disabled={!expressionOptions.length} > 
+                    {#each expressionOptions as name} 
+                    <option value={name}>{name}</option> {/each} </select> </div>
                         <div class="model-selector">
                             <button on:click={prevModel} class="arrow-btn">⟨</button>
                             <button class="confirm-btn" on:click={confirmModel}>
@@ -714,5 +732,22 @@
 
     .confirm-btn:hover {
     	background: #0d8c6c;
+    }
+
+    .expr {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(34,34,34,.8);
+    padding: 6px 10px;
+    border-radius: 8px;
+    z-index: 60;
+    }
+    .expr select {
+    background: #2a2b32;
+    color: #ececf1;
+    border: 1px solid #3b3c42;
+    border-radius: 6px;
+    padding: 4px 8px;
     }
 </style>

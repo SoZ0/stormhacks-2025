@@ -20,6 +20,29 @@
 	let canvas: HTMLCanvasElement;
 	let app: Application | null = null;
 	let model: Live2DModelType | null = null;
+    export let expressions: string[] = [];
+
+export function setExpression(name: string) {
+(model as any)?.expression?.(name);
+}
+
+const exprNames = async (m: any, url: string): Promise<string[]> => {
+const s = m?.internalModel?.settings || m?.internalModel?._settings || m?.settings;
+const pick = (arr: any[]) =>
+arr
+.map((e: any) => e?.Name || (e?.File && String(e.File).replace(/.exp3.json$/i, '')))
+.filter((n: any) => typeof n === 'string' && n.trim());
+const fromSettings = pick((s?.FileReferences?.Expressions ?? []) as any[]);
+if (fromSettings.length) return fromSettings;
+try {
+const j = await (await fetch(url, { cache: 'no-cache' })).json();
+return pick((j?.FileReferences?.Expressions ?? []) as any[]);
+} catch {
+return [];
+}
+};
+
+
 
 	const isAbsoluteUrl = (value: string) => /^https?:\/\//i.test(value) || value.startsWith('//');
 
@@ -211,6 +234,9 @@
 			model.update(0);
 			applyLayout();
 
+            expressions = await exprNames(model, modelUrl);
+            const def = expressions[0];
+            if (def) (model as any)?.expression?.(def);
 			updateLayoutFn = applyLayout;
 			loadedModelConfig = { modelUrl, coreSrc };
 		} catch (error) {
