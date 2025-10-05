@@ -26,6 +26,15 @@ bun run build
 ```
 Artifacts live in `web/build/`.
 
+## Build the combined static site
+Packages the marketing page under the root URL and the Svelte app under `/demo`.
+```bash
+./build-sites.sh [output-directory]  # defaults to ./dist
+```
+The script selects Bun, pnpm, or npm automatically, builds the SvelteKit app with `TAURI_BUILD=1`, and copies the contents of `tech/` to the output root. The final layout looks like:
+- `<output>/index.html` – the tech landing page
+- `<output>/demo/` – the static SvelteKit build from `web/build/`
+
 ## Compile the desktop binaries
 Runs the SvelteKit production build and compiles the Rust binary plus native installers for the host OS.
 ```bash

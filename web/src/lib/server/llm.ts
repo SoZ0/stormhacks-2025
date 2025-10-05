@@ -1,7 +1,7 @@
 import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
-import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
+import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
 import { LIVE2D_TOOLS, executeLive2DTool } from '$lib/server/tools/live2d';
 
 export interface ProviderMessage {
@@ -99,18 +99,16 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
 const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
   encoder.encode(`${JSON.stringify(event)}\n`);
 
-const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.
-
-You can also trigger a Live2D avatar reaction using the function live2d_react by choosing an expression and/or motionId from the model's available options when it helps convey your response (e.g., happy, surprised, thinking).`;
+const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.`;
 
 const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
   const alreadyPresent = history.some(
-    (message) => message.role === 'system' && message.content === SFU_TOOL_SYSTEM_PROMPT
+    (message) => message.role === 'system' && message.content === TOOL_SYSTEM_PROMPT
   );
   if (alreadyPresent) {
     return history;
   }
-  return [{ role: 'system', content: SFU_TOOL_SYSTEM_PROMPT }, ...history];
+  return [{ role: 'system', content: TOOL_SYSTEM_PROMPT }, ...history];
 };
 
 export const streamProviderChat = async (
@@ -147,7 +145,7 @@ const checkOllamaToolSupport = async (provider: ProviderConfig, model: string): 
   const requestBody: Record<string, unknown> = {
     model,
     stream: false,
-    tools: SFU_OUTLINES_TOOLS,
+    tools: REGISTERED_TOOLS,
     messages: [
       {
         role: 'user',
@@ -490,13 +488,7 @@ const handleToolCall = async (
   }
 
   try {
-    let result: unknown;
-    if (toolName === 'live2d_react') {
-      result = await executeLive2DTool(toolName, call.function.arguments);
-      if (emitTool) emitTool(result);
-    } else {
-      result = await executeSfuOutlinesTool(toolName, call.function.arguments);
-    }
+    const result = await executeSfuOutlinesTool(toolName, call.function.arguments);
     return {
       role: 'tool',
       tool_call_id: toolCallId,
@@ -541,7 +533,7 @@ const runOllamaChat = async (
   }
 
   if (enableTools) {
-    requestBase.tools = [...SFU_OUTLINES_TOOLS, ...LIVE2D_TOOLS];
+    requestBase.tools = SFU_OUTLINES_TOOLS;
   }
 
   if (!enableTools) {
@@ -729,7 +721,7 @@ const buildGeminiSystemInstruction = (messages: string[]) =>
 
 const buildGeminiToolsPayload = () => [
   {
-    functionDeclarations: [...SFU_OUTLINES_TOOLS, ...LIVE2D_TOOLS].map((tool) => ({
+    functionDeclarations: SFU_OUTLINES_TOOLS.map((tool) => ({
       name: tool.function.name,
       description: tool.function.description,
       parameters: tool.function.parameters
@@ -861,7 +853,7 @@ const createGeminiToolResponseContent = async (
   }
 
   try {
-    const data = await executeSfuOutlinesTool(normalized, rawArgs);
+    const data = await executeRegisteredTool(normalized, rawArgs);
     return {
       role: 'function',
       parts: [
