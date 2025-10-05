@@ -34,12 +34,49 @@
 	export let state: ModelPreviewState = { models: [], index: 0, current: null };
 	export let expressionOptions: string[] = [];
 	export let selectedExpression = '';
+	export let autoGenerateAudio = false;
 
-	const dispatch = createEventDispatcher<{ prev: void; next: void; confirm: number }>();
+	const dispatch = createEventDispatcher<{
+		prev: void;
+		next: void;
+		confirm: number;
+		autoGenerateAudioChange: boolean;
+	}>();
 
 	const handlePrev = () => dispatch('prev');
 	const handleNext = () => dispatch('next');
 	const handleConfirm = () => dispatch('confirm', state.index);
+	const handleAutoAudioToggle = () => {
+		const next = !autoGenerateAudio;
+		dispatch('autoGenerateAudioChange', next);
+	};
+
+	let isSettingsOpen = false;
+	let settingsButton: HTMLButtonElement | null = null;
+	let settingsMenu: HTMLDivElement | null = null;
+
+	const closeSettings = () => {
+		isSettingsOpen = false;
+	};
+
+	const toggleSettings = () => {
+		isSettingsOpen = !isSettingsOpen;
+	};
+
+	const handleWindowClick = (event: MouseEvent) => {
+		if (!isSettingsOpen) return;
+		const target = event.target as Node;
+		if (settingsMenu?.contains(target) || settingsButton?.contains(target)) return;
+		closeSettings();
+	};
+
+	const handleWindowKeydown = (event: KeyboardEvent) => {
+		if (!isSettingsOpen) return;
+		if (event.key === 'Escape') {
+			closeSettings();
+			settingsButton?.focus();
+		}
+	};
 
 	let activeModel: ModelOption = DEFAULT_MODEL;
 	let previewConfig: Live2DPreviewConfig = { modelPath: DEFAULT_MODEL.modelPath };
@@ -81,10 +118,74 @@
 	};
 </script>
 
-<div class="flex h-full flex-col gap-4 overflow-hidden rounded-3xl border border-surface-800/60 bg-gradient-to-b from-surface-950/80 via-surface-950/60 to-surface-950/30 p-4 shadow-xl shadow-surface-950/30">
+<svelte:window on:click={handleWindowClick} on:keydown={handleWindowKeydown} />
+
+<div
+	class="flex h-full flex-col gap-4 overflow-hidden rounded-3xl border border-surface-800/60 bg-gradient-to-b from-surface-950/80 via-surface-950/60 to-surface-950/30 p-4 shadow-xl shadow-surface-950/30"
+>
 	<header class="flex flex-col gap-4">
-		<p class="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">Model Preview</p>
-		<h2 class="text-lg font-semibold text-surface-50">{activeModel.label}</h2>
+		<div class="flex items-start justify-between gap-3">
+			<div class="flex flex-col gap-2">
+				<p class="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">Model Preview</p>
+				<h2 class="text-lg font-semibold text-surface-50">{activeModel.label}</h2>
+			</div>
+			<div class="relative">
+				<button
+					type="button"
+					class="btn btn-icon btn-icon-base border border-surface-800/60 bg-surface-950/60 text-sm text-surface-300 transition hover:text-surface-50"
+					aria-label={isSettingsOpen ? 'Close model settings' : 'Open model settings'}
+					aria-expanded={isSettingsOpen}
+					aria-haspopup="dialog"
+					on:click|stopPropagation={toggleSettings}
+					bind:this={settingsButton}
+				>
+					<span aria-hidden="true">⚙</span>
+				</button>
+				{#if isSettingsOpen}
+					<div
+						class="absolute right-0 top-11 z-20 w-64 rounded-2xl border border-surface-800/60 bg-surface-950/95 p-4 shadow-xl shadow-surface-950/50"
+						role="dialog"
+						tabindex="-1"
+						on:click|stopPropagation
+						on:keydown|stopPropagation
+						bind:this={settingsMenu}
+					>
+						<div class="flex flex-col gap-3">
+							<div class="flex flex-col gap-2">
+								<span class="text-[10px] font-semibold uppercase tracking-[0.2em] text-surface-500">Model Settings</span>
+								<div class="flex items-center justify-between gap-3">
+									<div class="flex flex-col">
+										<span class="text-sm font-semibold text-surface-100">Auto-generate audio</span>
+										<span class="text-xs text-surface-400">Create TTS for new replies automatically.</span>
+									</div>
+									<button
+										type="button"
+										class={`relative inline-flex h-6 w-12 items-center rounded-full border transition ${
+											autoGenerateAudio
+												? 'border-primary-400 bg-primary-500/80'
+												: 'border-surface-700 bg-surface-900/80'
+										}`}
+										role="switch"
+										aria-checked={autoGenerateAudio}
+										aria-label="Toggle automatic audio generation"
+										on:click|stopPropagation={handleAutoAudioToggle}
+									>
+										<span
+											class={`pointer-events-none absolute left-1 h-4 w-4 rounded-full bg-surface-950 shadow-sm shadow-surface-950/60 transition-transform duration-150 ease-out ${
+												autoGenerateAudio ? 'translate-x-5' : ''
+											}`}
+										></span>
+									</button>
+								</div>
+							</div>
+							<p class="text-xs text-surface-400">
+								When off, use the Generate audio button on responses whenever you need TTS.
+							</p>
+						</div>
+					</div>
+				{/if}
+			</div>
+		</div>
 	</header>
 	<div class="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-surface-800/40 bg-surface-950/40">
 		<Live2DPreview

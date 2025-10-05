@@ -3,12 +3,26 @@ import type { ProviderId } from './providers';
 
 export const SETTINGS_COOKIE = 'llm-settings';
 
+export type ThinkingLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+
+export const THINKING_LEVEL_VALUES: readonly ThinkingLevel[] = [
+  'auto',
+  'off',
+  'low',
+  'medium',
+  'high'
+] as const;
+
+export const isThinkingLevel = (value: unknown): value is ThinkingLevel =>
+  typeof value === 'string' && THINKING_LEVEL_VALUES.includes(value as ThinkingLevel);
+
 export interface LLMGenerationOptions {
   temperature: number | null;
   topP: number | null;
   topK: number | null;
   maxInputTokens: number | null;
   maxOutputTokens: number | null;
+  thinkingLevel: ThinkingLevel;
 }
 
 export interface TtsSettings {
@@ -27,7 +41,8 @@ export const defaultGenerationOptions: LLMGenerationOptions = {
   topP: null,
   topK: null,
   maxInputTokens: null,
-  maxOutputTokens: null
+  maxOutputTokens: null,
+  thinkingLevel: 'auto'
 };
 
 export const defaultTtsSettings: TtsSettings = {
@@ -67,7 +82,8 @@ export const normalizeGenerationOptions = (value: unknown): LLMGenerationOptions
     topP: toNullableNumber(source.topP),
     topK: toNullableNumber(source.topK),
     maxInputTokens: toNullableNumber(source.maxInputTokens),
-    maxOutputTokens: toNullableNumber(source.maxOutputTokens)
+    maxOutputTokens: toNullableNumber(source.maxOutputTokens),
+    thinkingLevel: isThinkingLevel(source.thinkingLevel) ? source.thinkingLevel : 'auto'
   };
 };
 

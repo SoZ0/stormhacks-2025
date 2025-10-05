@@ -17,8 +17,11 @@
     import { onDestroy, onMount } from 'svelte';
     import { browser } from '$app/environment';
     import { base } from '$app/paths';
-	import { Application, type IApplicationOptions } from 'pixi.js';
-	import { Ticker } from '@pixi/ticker';
+	import { Application, type IApplicationOptions } from '@pixi/app';
+	import { extensions } from '@pixi/extensions';
+	import { InteractionManager } from '@pixi/interaction';
+	import type { BaseTexture, Texture as PixiTexture } from '@pixi/core';
+	import { Ticker, TickerPlugin } from '@pixi/ticker';
 	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
 	import { getLocalModelBundle } from '$lib/live2d/client';
 	import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
@@ -42,6 +45,72 @@
 		} catch (error) {
 			console.warn('Live2DPreview: unable to patch pixi URL resolver', error);
 		}
+	};
+
+	let pixiExtensionsRegistered = false;
+	const ensurePixiExtensionsRegistered = () => {
+		if (!browser || pixiExtensionsRegistered) return;
+		pixiExtensionsRegistered = true;
+		extensions.add(TickerPlugin, InteractionManager);
+		const pixiWindow = window as typeof window & { PIXI?: Record<string, unknown> };
+		pixiWindow.PIXI ??= {};
+		pixiWindow.PIXI.Ticker ??= Ticker;
+	};
+
+	type TextureUsageGlobal = typeof globalThis & {
+		__stormLive2DTextureUsage__?: Map<BaseTexture, number>;
+	};
+
+	const getBaseTextureUsage = (): Map<BaseTexture, number> => {
+		const globalScope = globalThis as TextureUsageGlobal;
+		if (!globalScope.__stormLive2DTextureUsage__) {
+			globalScope.__stormLive2DTextureUsage__ = new Map<BaseTexture, number>();
+		}
+		return globalScope.__stormLive2DTextureUsage__;
+	};
+
+	const baseTextureUsage = getBaseTextureUsage();
+
+	const trackModelTextures = (textures: PixiTexture[] | null | undefined) => {
+		if (!textures?.length) return;
+		for (const texture of textures) {
+			const base = texture?.baseTexture;
+			if (!base) continue;
+			baseTextureUsage.set(base, (baseTextureUsage.get(base) ?? 0) + 1);
+		}
+	};
+
+	const releaseModelTextures = (textures: PixiTexture[] | null | undefined) => {
+		if (!textures?.length) return;
+		for (const texture of textures) {
+			const base = texture?.baseTexture;
+			if (!base) {
+				texture.destroy(true);
+				continue;
+			}
+			const usage = baseTextureUsage.get(base) ?? 0;
+			if (usage <= 1) {
+				baseTextureUsage.delete(base);
+				texture.destroy(true);
+			} else {
+				baseTextureUsage.set(base, usage - 1);
+			}
+		}
+	};
+
+	let live2dModulePromise: Promise<typeof import('pixi-live2d-display/cubism4')> | null = null;
+	let live2dTickerRegistered = false;
+	const loadLive2DModule = async () => {
+		ensurePixiExtensionsRegistered();
+		if (!live2dModulePromise) {
+			live2dModulePromise = import('pixi-live2d-display/cubism4');
+		}
+		const module = await live2dModulePromise;
+		if (!live2dTickerRegistered) {
+			module.Live2DModel.registerTicker(Ticker);
+			live2dTickerRegistered = true;
+		}
+		return module;
 	};
 
 	interface Live2DWindow extends Window {
@@ -245,6 +314,9 @@ export let loading = false;
 	};
 
 	let updateLayoutFn: (() => void) | null = null;
+	let contextLost = false;
+	let handleContextLost: ((event: Event) => void) | null = null;
+	let handleContextRestored: (() => void) | null = null;
 
 	const disposeModel = () => {
 		if (!model) return;
@@ -254,7 +326,8 @@ export let loading = false;
 			activeApp.stage.removeChild(model);
 		}
 
-		model.destroy();
+		releaseModelTextures(model.textures as PixiTexture[]);
+		model.destroy({ children: true });
 		model = null;
 		updateLayoutFn = null;
 		mouthParamAvailable = false;
@@ -338,7 +411,6 @@ export let loading = false;
 		}
 	}
 
-	let tickerRegistered = false;
 	let loadToken = 0;
 	let inFlightModelConfig: ModelConfig | null = null;
 	let loadedModelConfig: ModelConfig | null = null;
@@ -349,6 +421,7 @@ export let loading = false;
 	/* eslint-disable svelte/infinite-reactive-loop */
 	const reloadModel = async (modelUrl: string, coreSrc: string) => {
 		if (!app || !container || !canvas) return;
+		if (contextLost) return;
 
 		const token = ++loadToken;
 		inFlightModelConfig = { modelUrl, coreSrc };
@@ -357,12 +430,7 @@ export let loading = false;
 		try {
 			await ensurePixiUrlResolvePatched();
 			await ensureCubismCore(coreSrc);
-			const { Live2DModel } = await import('pixi-live2d-display/cubism4');
-
-			if (!tickerRegistered) {
-				Live2DModel.registerTicker(Ticker);
-				tickerRegistered = true;
-			}
+			const { Live2DModel } = await loadLive2DModule();
 
 			const loadedModel = await Live2DModel.from(modelUrl);
 			loadedModel.autoUpdate = false;
@@ -376,6 +444,7 @@ export let loading = false;
 
 			model = loadedModel;
 			app.stage.addChild(model);
+			trackModelTextures(model.textures as PixiTexture[]);
 			model.anchor.set(clamp(anchorX, 0, 1), clamp(anchorY, 0, 1));
 			model.update(0);
 			applyLayout();
@@ -406,7 +475,7 @@ export let loading = false;
 	}
 
 	$: {
-		if (app && container && canvas) {
+		if (app && container && canvas && !contextLost) {
 			const desiredConfig: ModelConfig = {
 				modelUrl: resolvedModelUrl,
 				coreSrc: resolvedCubismCoreSrc
@@ -429,6 +498,7 @@ export let loading = false;
 
 		const init = async () => {
 			if (!container || !canvas) return;
+			ensurePixiExtensionsRegistered();
 
 			const options: Partial<IApplicationOptions> = {
 				backgroundAlpha: 0,
@@ -451,6 +521,35 @@ export let loading = false;
 				app = null;
 				return;
 			}
+
+			const canvasElement = canvas;
+			handleContextLost = (event: Event) => {
+				if (typeof (event as { preventDefault?: () => void }).preventDefault === 'function') {
+					(event as { preventDefault: () => void }).preventDefault();
+				}
+				contextLost = true;
+				loading = true;
+				loadToken += 1;
+				inFlightModelConfig = null;
+				loadedModelConfig = null;
+				disposeModel();
+			};
+			handleContextRestored = () => {
+				contextLost = false;
+				inFlightModelConfig = null;
+				loadedModelConfig = null;
+				if (currentApp && container && canvas) {
+					const desiredConfig: ModelConfig = {
+						modelUrl: resolvedModelUrl,
+						coreSrc: resolvedCubismCoreSrc
+					};
+					if (desiredConfig.modelUrl && desiredConfig.coreSrc) {
+						void reloadModel(desiredConfig.modelUrl, desiredConfig.coreSrc);
+					}
+				}
+			};
+			canvasElement.addEventListener('webglcontextlost', handleContextLost as EventListener, { passive: false });
+			canvasElement.addEventListener('webglcontextrestored', handleContextRestored as EventListener);
 
 			const resizeObserver = new ResizeObserver(() => applyLayout());
 			resizeObserver.observe(container);
@@ -504,6 +603,14 @@ export let loading = false;
 			teardown = () => {
 				resizeObserver.disconnect();
 				ticker.remove(tick);
+				if (canvas && handleContextLost) {
+					canvas.removeEventListener('webglcontextlost', handleContextLost as EventListener);
+				}
+				if (canvas && handleContextRestored) {
+					canvas.removeEventListener('webglcontextrestored', handleContextRestored as EventListener);
+				}
+				handleContextLost = null;
+				handleContextRestored = null;
 				disposeModel();
 			};
 		};

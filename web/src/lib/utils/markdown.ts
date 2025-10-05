@@ -16,6 +16,7 @@ const SANITIZE_OPTIONS: SanitizeOptions = {
     img: ['src', 'alt', 'title']
   },
   allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+  parseStyleAttributes: false,
   transformTags: {
     a: (tagName: string, attribs: sanitizeHtml.Attributes) => ({
       tagName,

@@ -23,6 +23,7 @@
     import ChatInput from '$lib/components/chat/ChatInput.svelte';
     import PromptSettingsModal from '$lib/components/chat/PromptSettingsModal.svelte';
     import LlmSettingsModal from '$lib/components/chat/LlmSettingsModal.svelte';
+    import { Live2DPreview, type Live2DPreviewConfig } from '$lib';
     import ModelPreviewPanel, { type ModelPreviewState } from '$lib/components/chat/ModelPreviewPanel.svelte';
     import type { ModelOption } from '$lib/chat/types';
     import Live2DModelManager from '$lib/components/live2d/Live2DModelManager.svelte';
@@ -160,7 +161,8 @@
         topP: options.topP ?? null,
         topK: options.topK ?? null,
         maxInputTokens: options.maxInputTokens ?? null,
-        maxOutputTokens: options.maxOutputTokens ?? null
+        maxOutputTokens: options.maxOutputTokens ?? null,
+        thinkingLevel: options.thinkingLevel ?? 'auto'
     });
 
     const areGenerationOptionsEqual = (a: LLMGenerationOptions, b: LLMGenerationOptions): boolean =>
@@ -168,7 +170,8 @@
         (a.topP ?? null) === (b.topP ?? null) &&
         (a.topK ?? null) === (b.topK ?? null) &&
         (a.maxInputTokens ?? null) === (b.maxInputTokens ?? null) &&
-        (a.maxOutputTokens ?? null) === (b.maxOutputTokens ?? null);
+        (a.maxOutputTokens ?? null) === (b.maxOutputTokens ?? null) &&
+        (a.thinkingLevel ?? 'auto') === (b.thinkingLevel ?? 'auto');
 
     const cloneChatConfig = (config: ChatConfig): ChatConfig => ({
         systemPrompt: config.systemPrompt ?? '',
@@ -599,6 +602,8 @@
     let activeModelIndex = 0;
     let activeModelId: string | null = null;
     let modelPreviewState: ModelPreviewState = { models: [], index: 0, current: null };
+    let activeMobileModel: ModelOption | null = null;
+    let mobilePreviewConfig: Live2DPreviewConfig | null = null;
     const live2dDraftOriginals = new Map<string, ModelOption>();
     const FALLBACK_LIVE2D_MODEL_IDS = ['builtin-huohuo', 'builtin-hiyori', 'builtin-miku'];
 
@@ -908,8 +913,8 @@
     let messages: Message[] = [];
     let autoGenerateAudio = false;
 
-    const toggleAutoGenerateAudio = () => {
-        autoGenerateAudio = !autoGenerateAudio;
+    const updateAutoGenerateAudio = (value: boolean) => {
+        autoGenerateAudio = value;
         persistActiveChatConfig();
     };
 
@@ -1153,7 +1158,8 @@
             topP: options.topP ?? null,
             topK: options.topK ?? null,
             maxInputTokens: options.maxInputTokens ?? null,
-            maxOutputTokens: options.maxOutputTokens ?? null
+            maxOutputTokens: options.maxOutputTokens ?? null,
+            thinkingLevel: options.thinkingLevel ?? 'auto'
         });
 
     const persistSettings = async (provider: ProviderId, model: string, options: LLMGenerationOptions) => {
@@ -1917,6 +1923,19 @@
         index: live2dModels.length ? previewIndex : 0,
         current: live2dModels[previewIndex] ?? currentModel
     };
+    $: activeMobileModel = modelPreviewState.current ?? modelPreviewState.models[modelPreviewState.index] ?? null;
+    $: mobilePreviewConfig = activeMobileModel
+        ? {
+              modelPath: activeMobileModel.modelPath,
+              cubismCorePath: activeMobileModel.cubismCorePath,
+              anchor: activeMobileModel.anchor,
+              position: activeMobileModel.position,
+              scaleMultiplier: activeMobileModel.scaleMultiplier,
+              targetHeightRatio: activeMobileModel.targetHeightRatio,
+              storage: activeMobileModel.storage,
+              localModelId: activeMobileModel.storage === 'local' ? activeMobileModel.id : null
+          }
+        : null;
     $: currentProvider = providers.find((provider) => provider.id === selectedProviderId) ?? defaultProvider;
     $: computedProvidersError = providersError ?? (providers.length === 0 && !providersLoading
             ? 'No providers found. Visit settings to add one.'
@@ -1984,19 +2003,30 @@
         </button>
         <div class="flex flex-col">
             <span class="text-xs font-semibold uppercase tracking-[0.35em] text-primary-300">StormHacks</span>
-            <span class="text-lg font-semibold text-surface-50">Agent Studio</span>
+            <span class="text-lg font-semibold text-surface-50">NIAMON</span>
         </div>
     </div>
 {/snippet}
 
 {#snippet appBarTrail()}
-    <button
-        type="button"
-        class="btn btn-base hidden bg-primary-500 text-[color:var(--color-primary-contrast-500)] font-semibold tracking-wide shadow-primary-500/30 lg:inline-flex"
-        on:click={startNewChat}
-    >
-        New Conversation
-    </button>
+    <div class="flex items-center gap-2">
+        <button
+            type="button"
+            class="btn btn-icon btn-icon-base border border-surface-800/50 bg-surface-950/60 text-base text-surface-200 shadow-lg shadow-surface-950/20 transition hover:text-surface-50 lg:hidden"
+            on:click={startNewChat}
+            aria-label="Start new chat"
+        >
+            ＋
+        </button>
+        <button
+            type="button"
+            class="btn btn-icon btn-icon-base border border-surface-800/50 bg-surface-950/60 text-base text-surface-200 shadow-lg shadow-surface-950/20 transition hover:text-surface-50 xl:hidden"
+            on:click={openPreviewDrawer}
+            aria-label="Configure Live2D model"
+        >
+            ⚙
+        </button>
+    </div>
 {/snippet}
 
 <div class="flex h-screen min-h-0 flex-col overflow-hidden bg-gradient-to-br from-surface-950 via-surface-950/95 to-surface-900 text-surface-50">
@@ -2009,7 +2039,7 @@
         padding="px-4 py-4 lg:px-8"
         classes="sticky top-0 z-40 backdrop-blur-xl"
     >
-        <p class="text-sm text-surface-400">Harness your favourite models, orchestrate agents, and ship faster.</p>
+        <p class="text-sm text-surface-400">Harness your favourite models, orchestrate study plans, and learn faster.</p>
     </AppBar>
 
     <div class="relative flex flex-1 overflow-hidden p-4 gap-4">
@@ -2038,15 +2068,28 @@
 
         <main class="relative z-10 flex-1 overflow-hidden min-h-0">
             <div class="flex h-full w-full flex-col gap-4 min-h-0">
-                <div class="flex h-full flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch">
-                    <section class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
-                        <ChatMessages
-                            {messages}
-                            on:thinkingToggle={handleMessageThinkingToggle}
-                            on:playAudio={handleMessageAudioPlay}
-                            on:stopAudio={handleMessageAudioStop}
-                            on:generateAudio={handleMessageAudioGenerate}
-                        />
+                <div class="flex flex-1 flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch">
+                    <section class="relative flex flex-1 min-h-0 flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
+                        <div class="relative flex flex-1 min-h-0">
+                            {#if mobilePreviewConfig}
+                                <div class="pointer-events-none absolute inset-0 overflow-hidden opacity-40 xl:hidden">
+                                    <Live2DPreview
+                                        config={mobilePreviewConfig}
+                                        bind:expressions={expressionOptions}
+                                    />
+                                    <div class="absolute inset-0 bg-gradient-to-b from-surface-950/40 via-surface-950/10 to-surface-950/80"></div>
+                                </div>
+                            {/if}
+                            <div class="relative flex flex-1">
+                                <ChatMessages
+                                    {messages}
+                                    on:thinkingToggle={handleMessageThinkingToggle}
+                                    on:playAudio={handleMessageAudioPlay}
+                                    on:stopAudio={handleMessageAudioStop}
+                                    on:generateAudio={handleMessageAudioGenerate}
+                                />
+                            </div>
+                        </div>
 
                         <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
                             <div class="flex flex-col gap-4">
@@ -2065,22 +2108,6 @@
                                     on:systemPromptChange={({ detail }) => updateSystemPrompt(detail)}
                                     on:optionsChange={({ detail }) => updateGenerationOptions(detail)}
                                 />
-                                <div class="flex flex-col gap-2 sm:flex-row xl:hidden">
-                                    <button
-                                        type="button"
-                                        class="btn btn-base flex-1 border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
-                                        on:click={startNewChat}
-                                    >
-                                        New Chat
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="btn btn-base flex-1 bg-primary-500 text-sm font-semibold text-[color:var(--color-primary-contrast-500)] shadow-lg shadow-primary-500/25"
-                                        on:click={openPreviewDrawer}
-                                    >
-                                        View Model
-                                    </button>
-                                </div>
                                 <ChatInput
                                     bind:value={input}
                                     {isSending}
@@ -2100,8 +2127,8 @@
                         </div>
                     </section>
 
-                    <aside class="xl:block xl:w-[420px] 2xl:w-[480px] h-full flex flex-col">
-                         <div class="flex flex-col gap-2 mb-4">
+                    <aside class="hidden h-full flex-col xl:flex xl:w-[420px] 2xl:w-[480px]">
+                        <div class="mb-4 flex flex-col gap-2">
                             <button
                                 type="button"
                                 class="btn btn-base border border-blue-800/60 bg-blue-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
@@ -2119,39 +2146,12 @@
                             state={modelPreviewState}
                             bind:expressionOptions
                             bind:selectedExpression
+                            autoGenerateAudio={autoGenerateAudio}
+                            on:autoGenerateAudioChange={({ detail }) => updateAutoGenerateAudio(detail)}
                             on:prev={prevModel}
                             on:next={nextModel}
                             on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
                         />
-                        <div class="mt-4 flex flex-col gap-3 rounded-3xl border border-surface-800/50 bg-surface-950/70 p-4 shadow-lg shadow-surface-950/20">
-                            <div class="flex items-center justify-between gap-3">
-                                <div class="flex flex-col">
-                                    <span class="text-sm font-semibold text-surface-100">Auto-generate audio</span>
-                                    <span class="text-xs text-surface-400">Create TTS for new replies automatically.</span>
-                                </div>
-                                <button
-                                    type="button"
-                                    class={`relative inline-flex h-6 w-12 items-center rounded-full border transition ${
-                                        autoGenerateAudio
-                                            ? 'border-primary-400 bg-primary-500/80'
-                                            : 'border-surface-700 bg-surface-900/80'
-                                    }`}
-                                    role="switch"
-                                    aria-checked={autoGenerateAudio}
-                                    aria-label="Toggle automatic audio generation"
-                                    on:click={toggleAutoGenerateAudio}
-                                >
-                                    <span
-                                        class={`pointer-events-none absolute left-1 h-4 w-4 rounded-full bg-surface-950 shadow-sm shadow-surface-950/60 transition-transform duration-150 ease-out ${
-                                            autoGenerateAudio ? 'translate-x-5' : ''
-                                        }`}
-                                    ></span>
-                                </button>
-                            </div>
-                            <p class="text-xs text-surface-400">
-                                When off, use the Generate audio button on responses whenever you need TTS.
-                            </p>
-                        </div>
 
                     </aside>
                 </div>
@@ -2180,6 +2180,8 @@
                                 state={modelPreviewState}
                                 bind:expressionOptions
                                 bind:selectedExpression
+                                autoGenerateAudio={autoGenerateAudio}
+                                on:autoGenerateAudioChange={({ detail }) => updateAutoGenerateAudio(detail)}
                                 on:prev={prevModel}
                                 on:next={nextModel}
                                 on:confirm={({ detail }) => {

@@ -14,7 +14,13 @@
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",
 		"tauri:build:frontend": "cross-env TAURI_BUILD=1 vite build",
-		"tauri:icon": "tauri icon src-tauri/icons/app-icon.png"
+		"tauri:icon": "tauri icon src-tauri/icons/app-icon.png",
+		"tauri:android:init": "tauri android init",
+		"tauri:android:dev": "tauri android dev",
+		"tauri:android:build": "tauri android build",
+		"tauri:ios:init": "tauri ios init",
+		"tauri:ios:dev": "tauri ios dev",
+		"tauri:ios:build": "tauri ios build"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.37.0",

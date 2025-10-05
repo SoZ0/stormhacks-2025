@@ -2,11 +2,16 @@
   import { createEventDispatcher } from 'svelte';
   import {
     defaultGenerationOptions,
-    type LLMGenerationOptions
+    THINKING_LEVEL_VALUES,
+    isThinkingLevel,
+    type LLMGenerationOptions,
+    type ThinkingLevel
   } from '$lib/llm/settings';
 
   export let systemPrompt = '';
   export let options: LLMGenerationOptions = { ...defaultGenerationOptions };
+
+  type NumericOptionKey = Exclude<keyof LLMGenerationOptions, 'thinkingLevel'>;
 
   const dispatch = createEventDispatcher<{
     systemPromptChange: string;
@@ -25,7 +30,7 @@
     return Number.isFinite(parsed) ? parsed : null;
   };
 
-  const sanitizeOptionValue = (key: keyof LLMGenerationOptions, value: number | null): number | null => {
+  const sanitizeOptionValue = (key: NumericOptionKey, value: number | null): number | null => {
     if (value === null) return null;
 
     switch (key) {
@@ -47,7 +52,7 @@
     }
   };
 
-  const handleOptionsChange = (key: keyof LLMGenerationOptions) => (event: Event) => {
+  const handleOptionsChange = (key: NumericOptionKey) => (event: Event) => {
     const target = event.currentTarget as HTMLInputElement;
     const rawValue = toNullableNumber(target.value ?? '');
     const sanitized = sanitizeOptionValue(key, rawValue);
@@ -57,6 +62,23 @@
   };
 
   const formatOptionValue = (value: number | null) => (value ?? '').toString();
+
+  const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
+    auto: 'Auto',
+    off: 'Off',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High'
+  };
+
+  const handleThinkingLevelChange = (event: Event) => {
+    const target = event.currentTarget as HTMLSelectElement | null;
+    const selected = target?.value;
+    const nextLevel = isThinkingLevel(selected) ? selected : 'auto';
+    const nextOptions: LLMGenerationOptions = { ...options, thinkingLevel: nextLevel };
+    options = nextOptions;
+    dispatch('optionsChange', nextOptions);
+  };
 </script>
 
 <div class="flex flex-col gap-4">
@@ -139,6 +161,18 @@
           class="input bg-surface-950/60 ring-1 ring-surface-800/60 text-sm text-surface-100 transition focus:outline-none focus:ring-2 focus:ring-primary-500"
           placeholder="Model default"
         />
+      </label>
+      <label class="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-surface-400 sm:col-span-2">
+        <span>Thinking Level</span>
+        <select
+          value={options.thinkingLevel ?? 'auto'}
+          on:change={handleThinkingLevelChange}
+          class="input bg-surface-950/60 ring-1 ring-surface-800/60 text-sm text-surface-100 transition focus:outline-none focus:ring-2 focus:ring-primary-500"
+        >
+          {#each THINKING_LEVEL_VALUES as level}
+            <option class="bg-surface-900" value={level}>{THINKING_LEVEL_LABELS[level]}</option>
+          {/each}
+        </select>
       </label>
     </div>
   </div>

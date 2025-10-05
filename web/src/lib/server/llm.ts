@@ -61,6 +61,21 @@ const buildOllamaOptions = (options: LLMGenerationOptions): Record<string, numbe
   return payload;
 };
 
+const resolveOllamaThinkSetting = (
+  level: LLMGenerationOptions['thinkingLevel'] | undefined
+): boolean | 'low' | 'medium' | 'high' | undefined => {
+  switch (level) {
+    case 'off':
+      return false;
+    case 'low':
+    case 'medium':
+    case 'high':
+      return level;
+    default:
+      return undefined;
+  }
+};
+
 const resolveGeminiApiKey = (provider: ProviderConfig): string => {
   const key = provider.settings.apiKey?.trim() || env.GEMINI_API_KEY;
   if (!key) {
@@ -504,6 +519,11 @@ const runOllamaChat = async (
     model,
     messages
   };
+
+  const thinkSetting = resolveOllamaThinkSetting(options.thinkingLevel);
+  if (thinkSetting !== undefined) {
+    requestBase.think = thinkSetting;
+  }
 
   if (Object.keys(ollamaOptions).length > 0) {
     requestBase.options = ollamaOptions;
