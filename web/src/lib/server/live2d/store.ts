@@ -120,19 +120,57 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
   }
 ];
 
+const READ_ONLY_ERROR_CODES = new Set(['EROFS', 'EACCES', 'EPERM', 'ENOTSUP']);
+
+const isReadOnlyFsError = (error: unknown): error is NodeJS.ErrnoException => {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === 'string' && READ_ONLY_ERROR_CODES.has(code);
+};
+
+let storageIsReadOnly = false;
+
+const ensureDirectory = async (directory: string) => {
+  if (storageIsReadOnly) return;
+  try {
+    await mkdir(directory, { recursive: true });
+  } catch (error) {
+    if (isReadOnlyFsError(error)) {
+      storageIsReadOnly = true;
+      return;
+    }
+    throw error;
+  }
+};
+
 const ensureDirectories = async () => {
-  await mkdir(CUSTOM_MODELS_ROOT, { recursive: true });
-  await mkdir(DATA_ROOT, { recursive: true });
+  await ensureDirectory(CUSTOM_MODELS_ROOT);
+  await ensureDirectory(DATA_ROOT);
 };
 
 const writeDataFile = async (models: StoredLive2DModel[]) => {
   await ensureDirectories();
-  await writeFile(DATA_FILE, JSON.stringify(models, null, 2), 'utf8');
+  if (storageIsReadOnly) {
+    throw new Error('Live2D model storage is read-only in this environment.');
+  }
+
+  try {
+    await writeFile(DATA_FILE, JSON.stringify(models, null, 2), 'utf8');
+  } catch (error) {
+    if (isReadOnlyFsError(error)) {
+      storageIsReadOnly = true;
+      throw new Error('Live2D model storage is read-only in this environment.');
+    }
+    throw error;
+  }
 };
 
 const readDataFile = async (): Promise<StoredLive2DModel[]> => {
   await ensureDirectories();
   if (!existsSync(DATA_FILE)) {
+    if (storageIsReadOnly) {
+      return [];
+    }
     await writeDataFile([]);
     return [];
   }
@@ -295,6 +333,9 @@ export const createModel = async (input: CreateModelInput): Promise<Live2DModelR
   }
 
   await ensureDirectories();
+  if (storageIsReadOnly) {
+    throw new Error('Live2D model storage is read-only in this environment.');
+  }
 
   const baseName = label?.trim() || filename?.replace(/\.zip$/i, '') || 'live2d-model';
   const slugBase = slugify(baseName, 'live2d-model');
