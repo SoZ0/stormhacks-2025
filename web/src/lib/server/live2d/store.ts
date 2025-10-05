@@ -148,9 +148,19 @@ const ensureDirectories = async () => {
   await ensureDirectory(DATA_ROOT);
 };
 
-const writeDataFile = async (models: StoredLive2DModel[]) => {
+interface WriteDataFileOptions {
+  allowReadOnly?: boolean;
+}
+
+const writeDataFile = async (
+  models: StoredLive2DModel[],
+  options: WriteDataFileOptions = {}
+) => {
+  const { allowReadOnly = false } = options;
+
   await ensureDirectories();
   if (storageIsReadOnly) {
+    if (allowReadOnly) return;
     throw new Error('Live2D model storage is read-only in this environment.');
   }
 
@@ -159,6 +169,7 @@ const writeDataFile = async (models: StoredLive2DModel[]) => {
   } catch (error) {
     if (isReadOnlyFsError(error)) {
       storageIsReadOnly = true;
+      if (allowReadOnly) return;
       throw new Error('Live2D model storage is read-only in this environment.');
     }
     throw error;
@@ -171,7 +182,11 @@ const readDataFile = async (): Promise<StoredLive2DModel[]> => {
     if (storageIsReadOnly) {
       return [];
     }
-    await writeDataFile([]);
+    try {
+      await writeDataFile([], { allowReadOnly: true });
+    } catch {
+      return [];
+    }
     return [];
   }
 
