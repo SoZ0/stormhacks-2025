@@ -3,7 +3,6 @@ import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
 import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
 import { LIVE2D_TOOLS, executeLive2DTool } from '$lib/server/tools/live2d';
-import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
 
 export interface ProviderAttachment {
   id: string;
@@ -152,7 +151,7 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
 const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
   encoder.encode(`${JSON.stringify(event)}\n`);
 
-const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.`;
+const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools and curated web browsing helpers via function calls. Use the course outline tools for academic program details (years, terms, subjects, courses, sections, and full outlines) and the web tools when you need SFU resource searches or general webpage summaries. Summarize tool results for the user.`;
 
 const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
   const alreadyPresent = history.some(
@@ -552,7 +551,7 @@ const handleToolCall = async (
   }
 
   try {
-    const result = await executeSfuOutlinesTool(toolName, call.function.arguments);
+    const result = await executeRegisteredTool(toolName, call.function.arguments);
     return {
       role: 'tool',
       tool_call_id: toolCallId,
@@ -597,7 +596,7 @@ const runOllamaChat = async (
   }
 
   if (enableTools) {
-    requestBase.tools = SFU_OUTLINES_TOOLS;
+    requestBase.tools = REGISTERED_TOOLS;
   }
 
   if (!enableTools) {
@@ -815,7 +814,7 @@ const buildGeminiSystemInstruction = (messages: string[]) =>
 
 const buildGeminiToolsPayload = () => [
   {
-    functionDeclarations: SFU_OUTLINES_TOOLS.map((tool) => ({
+    functionDeclarations: REGISTERED_TOOLS.map((tool) => ({
       name: tool.function.name,
       description: tool.function.description,
       parameters: tool.function.parameters
