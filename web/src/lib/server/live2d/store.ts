@@ -120,7 +120,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
   }
 ];
 
-const READ_ONLY_ERROR_CODES = new Set(['EROFS', 'EACCES', 'EPERM', 'ENOTSUP']);
+const READ_ONLY_ERROR_CODES = new Set(['EROFS', 'EACCES', 'EPERM', 'ENOTSUP', 'ENOENT']);
 
 const isReadOnlyFsError = (error: unknown): error is NodeJS.ErrnoException => {
   if (!error || typeof error !== 'object') return false;
