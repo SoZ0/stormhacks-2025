@@ -28,6 +28,59 @@
   const defaultPositionX = DEFAULT_POSITION.x ?? 0.5;
   const defaultPositionY = DEFAULT_POSITION.y ?? 0.95;
 
+  const CUSTOM_MODEL_PREFIX = '/models/custom/';
+  const isExternalPath = (value: string) => /^https?:\/\//i.test(value) || value.startsWith('//');
+  const normalizeSlashes = (value: string) => value.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const stripLeadingSlashes = (value: string) => value.replace(/^\/+/, '');
+  const ensureLeadingSlash = (value: string) =>
+    value.startsWith('/') || isExternalPath(value) ? value : `/${value}`;
+  const getCustomSlug = (model: ModelOption | null | undefined) =>
+    model?.id?.startsWith('custom-') ? model.id.slice('custom-'.length) : null;
+
+  const toRelativeModelPath = (model: ModelOption | null | undefined, rawPath: string | null | undefined) => {
+    if (!model || !rawPath) return '';
+    const trimmed = rawPath.trim();
+    if (!trimmed || isExternalPath(trimmed)) return trimmed;
+    const normalized = stripLeadingSlashes(normalizeSlashes(trimmed));
+    const slug = getCustomSlug(model);
+    if (!slug) return normalized;
+    const prefix = `models/custom/${slug}/`;
+    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  };
+
+  const toAbsoluteModelPath = (
+    model: ModelOption | null | undefined,
+    rawPath: string | null | undefined
+  ) => {
+    if (!model) return rawPath ?? undefined;
+    if (!rawPath) {
+      return model.modelPath ?? model.availableModelFiles?.[0];
+    }
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      return model.modelPath ?? model.availableModelFiles?.[0];
+    }
+    if (isExternalPath(trimmed)) return trimmed;
+
+    const slug = getCustomSlug(model);
+    const normalized = stripLeadingSlashes(normalizeSlashes(trimmed));
+
+    if (!slug) {
+      return ensureLeadingSlash(normalized);
+    }
+
+    const match = model.availableModelFiles?.find(
+      (file) => toRelativeModelPath(model, file) === normalized
+    );
+    if (match) {
+      const normalizedMatch = stripLeadingSlashes(normalizeSlashes(match));
+      return ensureLeadingSlash(normalizedMatch);
+    }
+
+    const joined = normalizeSlashes(`${CUSTOM_MODEL_PREFIX}${slug}/${normalized}`);
+    return ensureLeadingSlash(stripLeadingSlashes(joined));
+  };
+
   interface EditFormState {
     label: string;
     modelPath: string;
@@ -59,7 +112,7 @@
 
   const formFromModel = (model: ModelOption): EditFormState => ({
     label: model.label ?? '',
-    modelPath: model.modelPath ?? '',
+    modelPath: toRelativeModelPath(model, model.modelPath),
     cubismCorePath: model.cubismCorePath ?? '',
     anchorX: stringify(model.anchor?.x, defaultAnchorX),
     anchorY: stringify(model.anchor?.y, defaultAnchorY),
@@ -199,7 +252,9 @@
       return null;
     }
 
-    const selectedPath = editForm.modelPath || editingModel.modelPath;
+    const selectedPath = editingModel.isCustom
+      ? toRelativeModelPath(editingModel, editForm.modelPath || editingModel.modelPath)
+      : (editForm.modelPath?.trim() || editingModel.modelPath);
     const anchorX = clamp(toNumber(editForm.anchorX) ?? defaultAnchorX, 0, 1);
     const anchorY = clamp(toNumber(editForm.anchorY) ?? defaultAnchorY, 0, 1);
     const positionX = clamp(toNumber(editForm.positionX) ?? defaultPositionX, 0, 1);
@@ -213,13 +268,16 @@
 
     const payload: Live2DModelUpdateInput = {
       label,
-      modelPath: selectedPath,
       cubismCorePath: editForm.cubismCorePath.trim() || undefined,
       anchor: { x: anchorX, y: anchorY },
       position: { x: positionX, y: positionY },
       scaleMultiplier,
       targetHeightRatio
     };
+
+    if (selectedPath?.trim()) {
+      payload.modelPath = selectedPath.trim();
+    }
 
     return payload;
   };
@@ -267,9 +325,8 @@
 
   const resolvedModelPath = () => {
     if (!editingModel) return undefined;
-    const candidate = editForm.modelPath?.trim();
-    if (candidate) return candidate;
-    if (editingModel.modelPath) return editingModel.modelPath;
+    const absolute = toAbsoluteModelPath(editingModel, editForm.modelPath);
+    if (absolute) return absolute;
     return editingModel.availableModelFiles?.[0];
   };
 
@@ -549,7 +606,7 @@
                       bind:value={editForm.modelPath}
                     >
                       {#each editingModel.availableModelFiles as file}
-                        <option value={file}>{displayPath(file)}</option>
+                        <option value={toRelativeModelPath(editingModel, file)}>{displayPath(file)}</option>
                       {/each}
                     </select>
                   </label>

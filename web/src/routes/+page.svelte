@@ -21,6 +21,7 @@
         type ModelSelectionState
     } from '$lib/components/chat/ChatProviderControls.svelte';
     import ChatInput from '$lib/components/chat/ChatInput.svelte';
+    import PromptSettingsModal from '$lib/components/chat/PromptSettingsModal.svelte';
     import ModelPreviewPanel, { type ModelPreviewState } from '$lib/components/chat/ModelPreviewPanel.svelte';
     import type { ModelOption } from '$lib/chat/types';
     import Live2DModelManager from '$lib/components/live2d/Live2DModelManager.svelte';
@@ -103,6 +104,213 @@
     let chatHistory: Record<string, Message[]> = {};
     let activeChatId = '';
     let pendingChatIds: string[] = [];
+
+    const sanitizeMessageForStore = (message: Message): Message => ({
+        ...message,
+        id: message.id ?? createMessageId(),
+        streaming: false,
+        thinkingOpen: message.hasThinking ? Boolean(message.thinkingOpen) : undefined
+    });
+
+    const sanitizeMessagesForStore = (list: Message[]): Message[] =>
+        list.map((message) => sanitizeMessageForStore(message));
+
+    const cloneMessagesFromStore = (list: Message[]): Message[] =>
+        list.map((message) => ({ ...sanitizeMessageForStore(message) }));
+
+    const deriveChatTitle = (list: Message[]): string => {
+        const firstUser = list.find((msg) => msg.sender === 'user' && (msg.text ?? msg.raw)?.trim());
+        if (!firstUser) return DEFAULT_CHAT_TITLE;
+        const source = (firstUser.text ?? firstUser.raw ?? '').trim();
+        if (!source) return DEFAULT_CHAT_TITLE;
+        return source.length > 60 ? `${source.slice(0, 57)}…` : source;
+    };
+
+    const addPendingChat = (id: string) => {
+        if (!id || pendingChatIds.includes(id)) return;
+        pendingChatIds = [...pendingChatIds, id];
+    };
+
+    const removePendingChat = (id: string) => {
+        if (!id) return;
+        if (!pendingChatIds.includes(id)) return;
+        pendingChatIds = pendingChatIds.filter((pendingId) => pendingId !== id);
+    };
+
+    const updateChatSummary = (
+        id: string,
+        updater: (chat: ChatSummary) => ChatSummary,
+        options?: { moveToTop?: boolean }
+    ) => {
+        const index = chats.findIndex((chat) => chat.id === id);
+        if (index === -1) return;
+        const updated = updater(chats[index]);
+        const moveToTop = options?.moveToTop ?? true;
+        if (moveToTop) {
+            const others = chats.filter((chat) => chat.id !== id);
+            chats = [updated, ...others];
+        } else {
+            const next = [...chats];
+            next[index] = updated;
+            chats = next;
+        }
+    };
+
+    const saveChatState = () => {
+        if (!browser) return;
+        try {
+            const history = Object.fromEntries(
+                Object.entries(chatHistory).map(([id, list]) => [id, sanitizeMessagesForStore(list)])
+            );
+            const payload: PersistedChatState = {
+                activeChatId,
+                chats,
+                history
+            };
+            localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(payload));
+        } catch (err) {
+            console.error('Failed to save chat state', err);
+        }
+    };
+
+    const ensureActiveChatMessagesSaved = () => {
+        if (!activeChatId) return;
+        chatHistory = {
+            ...chatHistory,
+            [activeChatId]: sanitizeMessagesForStore(messages)
+        };
+    };
+
+    const persistActiveChatMessages = (options?: { updateTimestamp?: boolean }) => {
+        if (!activeChatId) return;
+        const updateTimestamp = options?.updateTimestamp ?? true;
+        ensureActiveChatMessagesSaved();
+        if (updateTimestamp) {
+            updateChatSummary(activeChatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
+        }
+        saveChatState();
+    };
+
+    const loadChatState = (): boolean => {
+        if (!browser) return false;
+        try {
+            const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+            if (!raw) return false;
+            const parsed = JSON.parse(raw) as PersistedChatState | null;
+            if (!parsed || !Array.isArray(parsed.chats)) return false;
+
+            chats = parsed.chats.map((chat) => ({
+                id: String(chat.id ?? createChatId()),
+                title:
+                    typeof chat.title === 'string' && chat.title.trim()
+                        ? chat.title.trim()
+                        : DEFAULT_CHAT_TITLE,
+                createdAt: Number(chat.createdAt) || Date.now(),
+                updatedAt: Number(chat.updatedAt) || Number(chat.createdAt) || Date.now()
+            }));
+
+            const nextHistory: Record<string, Message[]> = {};
+            const entries = Object.entries(parsed.history ?? {});
+            for (const [id, list] of entries) {
+                if (Array.isArray(list)) {
+                    nextHistory[id] = cloneMessagesFromStore(list as Message[]);
+                }
+            }
+            chatHistory = nextHistory;
+
+            const candidateId = parsed.activeChatId;
+            activeChatId = candidateId && chatHistory[candidateId] ? candidateId : '';
+
+            return true;
+        } catch (err) {
+            console.error('Failed to load chat state', err);
+            return false;
+        }
+    };
+
+    const createAndActivateChat = (options?: { preserveCurrent?: boolean }) => {
+        const preserveCurrent = options?.preserveCurrent ?? true;
+        if (preserveCurrent) {
+            ensureActiveChatMessagesSaved();
+            saveChatState();
+        }
+
+        const id = createChatId();
+        const now = Date.now();
+        const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+        chatHistory = { ...chatHistory, [id]: initialMessages };
+        const summary: ChatSummary = {
+            id,
+            title: DEFAULT_CHAT_TITLE,
+            createdAt: now,
+            updatedAt: now
+        };
+        chats = [summary, ...chats.filter((chat) => chat.id !== id)];
+        activeChatId = id;
+        messages = cloneMessagesFromStore(initialMessages);
+        saveChatState();
+        return id;
+    };
+
+    const setActiveChat = (id: string, options?: { preserveCurrent?: boolean }) => {
+        if (!id || id === activeChatId) return;
+        const preserveCurrent = options?.preserveCurrent ?? true;
+        if (preserveCurrent) {
+            ensureActiveChatMessagesSaved();
+            saveChatState();
+        }
+
+        const stored = chatHistory[id];
+        if (!stored) {
+            const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+            chatHistory = { ...chatHistory, [id]: initialMessages };
+            messages = cloneMessagesFromStore(initialMessages);
+        } else {
+            messages = cloneMessagesFromStore(stored);
+        }
+
+        activeChatId = id;
+        input = '';
+        error = null;
+        isSending = false;
+        saveChatState();
+    };
+
+    const renameChat = (id: string, title: string) => {
+        const trimmed = title?.trim();
+        const nextTitle = trimmed ? trimmed : DEFAULT_CHAT_TITLE;
+        updateChatSummary(
+            id,
+            (chat) => ({
+                ...chat,
+                title: nextTitle
+            }),
+            { moveToTop: false }
+        );
+        saveChatState();
+    };
+
+    const deleteChat = (id: string) => {
+        if (!id || !chats.some((chat) => chat.id === id)) return;
+
+        chats = chats.filter((chat) => chat.id !== id);
+        const { [id]: _removed, ...restHistory } = chatHistory;
+        chatHistory = restHistory;
+        pendingChatIds = pendingChatIds.filter((pendingId) => pendingId !== id);
+
+        const wasActive = activeChatId === id;
+        if (wasActive) {
+            activeChatId = '';
+            const nextId = chats[0]?.id;
+            if (nextId) {
+                setActiveChat(nextId, { preserveCurrent: false });
+            } else {
+                createAndActivateChat({ preserveCurrent: false });
+            }
+        } else {
+            saveChatState();
+        }
+    };
 
     let live2dModels: ModelOption[] = [];
     let live2dModelsLoading = false;
@@ -246,6 +454,7 @@
     let input = "";
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
+    let isPromptSettingsOpen = false;
 
     let expressionOptions: string[] = [];
     let selectedExpression = '';
@@ -310,9 +519,20 @@
         isCollapsed = !isCollapsed;
     };
 
+    const openPromptSettings = () => {
+        isPromptSettingsOpen = true;
+    };
+
+    const closePromptSettings = () => {
+        isPromptSettingsOpen = false;
+    };
+
     const startNewChat = () => {
-        messages = [createInitialBotMessage()];
+        const id = createAndActivateChat();
         error = null;
+        input = '';
+        isSending = false;
+        removePendingChat(id);
     };
 
     const ensureModels = async (provider: ProviderId) => {
@@ -424,6 +644,11 @@
             return;
         }
 
+        if (!activeChatId) {
+            createAndActivateChat({ preserveCurrent: false });
+        }
+        const chatId = activeChatId || createAndActivateChat({ preserveCurrent: false });
+
         const userMessage: Message = {
             id: createMessageId(),
             sender: 'user',
@@ -440,9 +665,21 @@
         }));
 
         messages = nextMessages;
-        input = "";
+        input = '';
         error = null;
         isSending = true;
+        addPendingChat(chatId);
+
+        const derivedTitle = deriveChatTitle(nextMessages);
+        updateChatSummary(
+            chatId,
+            (chat) => ({
+                ...chat,
+                title: chat.title && chat.title !== DEFAULT_CHAT_TITLE ? chat.title : derivedTitle,
+                updatedAt: Date.now()
+            })
+        );
+        persistActiveChatMessages();
 
         try {
             const assistantMessage: Message = {
@@ -463,51 +700,64 @@
                 );
             };
 
-            await streamChatMessage(selectedProviderId, selectedModel, systemPrompt, payload, generationOptions, (event: ChatStreamEvent) => {
-                if (event.type === 'delta' && event.value) {
-                    assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
-                    const { text, thinking, hasThinking } = extractMessageParts(assistantMessage.raw ?? '');
-                    assistantMessage.text = text;
-                    assistantMessage.thinking = thinking;
-                    assistantMessage.hasThinking = hasThinking;
-                    assistantMessage.thinkingOpen = hasThinking
-                        ? assistantMessage.streaming !== false
-                            ? assistantMessage.thinkingOpen ?? true
-                            : assistantMessage.thinkingOpen ?? false
-                        : false;
-                    updateAssistant(() => ({ ...assistantMessage }));
-                }
-
-                if (event.type === 'done') {
-                    if (event.value && (!assistantMessage.raw || assistantMessage.raw !== event.value)) {
-                        assistantMessage.raw = event.value;
+            await streamChatMessage(
+                selectedProviderId,
+                selectedModel,
+                systemPrompt,
+                payload,
+                generationOptions,
+                (event: ChatStreamEvent) => {
+                    if (event.type === 'delta' && event.value) {
+                        assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
+                        const { text, thinking, hasThinking } = extractMessageParts(
+                            assistantMessage.raw ?? ''
+                        );
+                        assistantMessage.text = text;
+                        assistantMessage.thinking = thinking;
+                        assistantMessage.hasThinking = hasThinking;
+                        assistantMessage.thinkingOpen = hasThinking
+                            ? assistantMessage.streaming !== false
+                                ? assistantMessage.thinkingOpen ?? true
+                                : assistantMessage.thinkingOpen ?? false
+                            : false;
+                        updateAssistant(() => ({ ...assistantMessage }));
                     }
 
-                    const finalRaw = assistantMessage.raw ?? event.value ?? '';
-                    const { text, thinking, hasThinking } = extractMessageParts(finalRaw);
-                    const fallbackVisible = text || (hasThinking ? stripThinkingTags(finalRaw) : finalRaw).trim();
-                    assistantMessage.text = fallbackVisible;
-                    assistantMessage.thinking = thinking;
-                    assistantMessage.hasThinking = hasThinking;
-                    assistantMessage.streaming = false;
-                    assistantMessage.thinkingOpen = hasThinking ? false : undefined;
-                    updateAssistant(() => ({ ...assistantMessage }));
-                    if (assistantMessage.text?.trim()) {
-                        speakText(assistantMessage.text);
-                    } else {
-                        console.warn('Skipping TTS: empty text');
+                    if (event.type === 'done') {
+                        if (event.value && (!assistantMessage.raw || assistantMessage.raw !== event.value)) {
+                            assistantMessage.raw = event.value;
+                        }
+
+                        const finalRaw = assistantMessage.raw ?? event.value ?? '';
+                        const { text, thinking, hasThinking } = extractMessageParts(finalRaw);
+                        const fallbackVisible = text || (hasThinking ? stripThinkingTags(finalRaw) : finalRaw).trim();
+                        assistantMessage.text = fallbackVisible;
+                        assistantMessage.thinking = thinking;
+                        assistantMessage.hasThinking = hasThinking;
+                        assistantMessage.streaming = false;
+                        assistantMessage.thinkingOpen = hasThinking ? false : undefined;
+                        updateAssistant(() => ({ ...assistantMessage }));
+                        removePendingChat(chatId);
+                        persistActiveChatMessages();
+                        if (assistantMessage.text?.trim()) {
+                            speakText(assistantMessage.text);
+                        } else {
+                            console.warn('Skipping TTS: empty text');
+                        }
+                    }
+
+                    if (event.type === 'error') {
+                        throw new Error(event.message ?? 'An unexpected error occurred');
                     }
                 }
-
-                if (event.type === 'error') {
-                    throw new Error(event.message ?? 'An unexpected error occurred');
-                }
-            });
+            );
         } catch (err) {
             error = err instanceof Error ? err.message : 'An unexpected error occurred';
             messages = nextMessages;
+            persistActiveChatMessages();
         } finally {
             isSending = false;
+            removePendingChat(chatId);
         }
     };
 
@@ -539,6 +789,33 @@
 
         if (typeof window !== 'undefined' && window.innerWidth <= 800) {
             isCollapsed = true;
+        }
+
+        if (browser) {
+            const loaded = loadChatState();
+
+            if (loaded) {
+                const initialId = activeChatId && chatHistory[activeChatId] ? activeChatId : chats[0]?.id;
+
+                if (initialId) {
+                    const storedMessages = chatHistory[initialId];
+
+                    if (storedMessages && storedMessages.length) {
+                        activeChatId = initialId;
+                        messages = cloneMessagesFromStore(storedMessages);
+                    } else {
+                        const initialMessages = sanitizeMessagesForStore([createInitialBotMessage()]);
+                        chatHistory = { ...chatHistory, [initialId]: initialMessages };
+                        activeChatId = initialId;
+                        messages = cloneMessagesFromStore(initialMessages);
+                        saveChatState();
+                    }
+                } else {
+                    createAndActivateChat({ preserveCurrent: false });
+                }
+            } else {
+                createAndActivateChat({ preserveCurrent: false });
+            }
         }
 
         void (async () => {
@@ -665,7 +942,13 @@
             settingsHref={resolve('/settings')}
             {isPersistingSettings}
             {settingsPersistError}
+            {chats}
+            {activeChatId}
+            {pendingChatIds}
             on:newChat={startNewChat}
+            on:selectChat={({ detail }) => setActiveChat(detail)}
+            on:renameChat={({ detail }) => renameChat(detail.id, detail.title)}
+            on:deleteChat={({ detail }) => deleteChat(detail)}
         />
 
         <main class="relative z-10 flex-1 overflow-hidden min-h-0">
@@ -681,6 +964,7 @@
                             modelState={modelSelectionState}
                             systemPrompt={systemPrompt}
                             options={generationOptions}
+                            showPromptSettings={false}
                             on:providerChange={({ detail }) => {
                                 selectedProviderId = detail;
                                 void handleProviderChange(detail);
@@ -710,6 +994,7 @@
                                     {isSending}
                                     isDisabled={isModelsLoading || !selectedModel}
                                     on:send={sendMessage}
+                                    on:openSettings={openPromptSettings}
                                 />
                                 {#if error}
                                     <p
@@ -824,4 +1109,13 @@
     on:created={handleModelManagerCreated}
     on:updated={handleModelManagerUpdated}
     on:deleted={handleModelManagerDeleted}
+/>
+
+<PromptSettingsModal
+    open={isPromptSettingsOpen}
+    systemPrompt={systemPrompt}
+    options={generationOptions}
+    on:close={closePromptSettings}
+    on:systemPromptChange={({ detail }) => (systemPrompt = detail)}
+    on:optionsChange={({ detail }) => (generationOptions = detail)}
 />
