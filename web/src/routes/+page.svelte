@@ -138,12 +138,14 @@
         systemPrompt: string;
         generationOptions: LLMGenerationOptions;
         live2dModelId: string | null;
+        autoGenerateAudio: boolean;
     }
 
     interface PersistedChatConfig {
         systemPrompt?: string | null;
         generationOptions?: unknown;
         live2dModelId?: string | null;
+        autoGenerateAudio?: unknown;
     }
 
     interface PersistedChatState {
@@ -171,7 +173,8 @@
     const cloneChatConfig = (config: ChatConfig): ChatConfig => ({
         systemPrompt: config.systemPrompt ?? '',
         generationOptions: cloneGenerationOptions(config.generationOptions),
-        live2dModelId: config.live2dModelId ?? null
+        live2dModelId: config.live2dModelId ?? null,
+        autoGenerateAudio: config.autoGenerateAudio ?? false
     });
 
     let chats: ChatSummary[] = [];
@@ -180,7 +183,8 @@
     let baseChatConfig: ChatConfig = {
         systemPrompt: '',
         generationOptions: { ...defaultGenerationOptions },
-        live2dModelId: null
+        live2dModelId: null,
+        autoGenerateAudio: false
     };
     let activeChatId = '';
     let pendingChatIds: string[] = [];
@@ -326,6 +330,7 @@
             systemPrompt = stored.systemPrompt ?? '';
             generationOptions = cloneGenerationOptions(stored.generationOptions);
             activeModelId = stored.live2dModelId ?? null;
+            autoGenerateAudio = stored.autoGenerateAudio ?? false;
             syncLive2DSelectionFromActiveId({ fallbackToDefault: true });
             persistActiveChatConfig({ save: false });
             return;
@@ -336,6 +341,7 @@
         systemPrompt = fallback.systemPrompt ?? '';
         generationOptions = cloneGenerationOptions(fallback.generationOptions);
         activeModelId = fallback.live2dModelId ?? null;
+        autoGenerateAudio = fallback.autoGenerateAudio ?? false;
         syncLive2DSelectionFromActiveId({ fallbackToDefault: true });
         persistActiveChatConfig({ save: false });
     }
@@ -345,7 +351,8 @@
         const nextConfig: ChatConfig = {
             systemPrompt,
             generationOptions: cloneGenerationOptions(generationOptions),
-            live2dModelId: activeModelId ?? null
+            live2dModelId: activeModelId ?? null,
+            autoGenerateAudio
         };
         chatConfigurations = { ...chatConfigurations, [activeChatId]: nextConfig };
         if (options?.save ?? true) {
@@ -373,14 +380,16 @@
         const currentConfig: ChatConfig = {
             systemPrompt,
             generationOptions: cloneGenerationOptions(generationOptions),
-            live2dModelId: activeModelId ?? null
+            live2dModelId: activeModelId ?? null,
+            autoGenerateAudio
         };
         const existing = chatConfigurations[activeChatId];
         if (
             !existing ||
             existing.systemPrompt !== currentConfig.systemPrompt ||
             !areGenerationOptionsEqual(existing.generationOptions, currentConfig.generationOptions) ||
-            existing.live2dModelId !== currentConfig.live2dModelId
+            existing.live2dModelId !== currentConfig.live2dModelId ||
+            existing.autoGenerateAudio !== currentConfig.autoGenerateAudio
         ) {
             chatConfigurations = { ...chatConfigurations, [activeChatId]: currentConfig };
         }
@@ -399,7 +408,8 @@
                     {
                         systemPrompt: config.systemPrompt ?? '',
                         generationOptions: cloneGenerationOptions(config.generationOptions),
-                        live2dModelId: config.live2dModelId ?? null
+                        live2dModelId: config.live2dModelId ?? null,
+                        autoGenerateAudio: config.autoGenerateAudio ?? false
                     }
                 ])
             );
@@ -473,10 +483,15 @@
                     persistedConfig && typeof persistedConfig.live2dModelId === 'string'
                         ? persistedConfig.live2dModelId
                         : null;
+                const autoGenerate =
+                    typeof persistedConfig?.autoGenerateAudio === 'boolean'
+                        ? persistedConfig.autoGenerateAudio
+                        : false;
                 nextConfigurations[id] = {
                     systemPrompt: system,
                     generationOptions: cloneGenerationOptions(options),
-                    live2dModelId
+                    live2dModelId,
+                    autoGenerateAudio: autoGenerate
                 };
             }
             chatConfigurations = nextConfigurations;
@@ -891,6 +906,12 @@
     };
 
     let messages: Message[] = [];
+    let autoGenerateAudio = false;
+
+    const toggleAutoGenerateAudio = () => {
+        autoGenerateAudio = !autoGenerateAudio;
+        persistActiveChatConfig();
+    };
 
     const handleMessageThinkingToggle = (event: CustomEvent<ThinkingTogglePayload>) => {
         const { messageId, messageIndex, blockIndex, open } = event.detail;
@@ -940,6 +961,15 @@
             ? event.detail.messageId
             : messages[event.detail.messageIndex]?.id;
         stopMessageAudio(target);
+    };
+
+    const handleMessageAudioGenerate = (
+        event: CustomEvent<{ messageId?: string; messageIndex: number }>
+    ) => {
+        void generateAudioForMessage(event.detail.messageId, event.detail.messageIndex, {
+            autoplay: false,
+            notifyOnSkip: true
+        });
     };
     let input = "";
     let systemPrompt = '';
@@ -1267,8 +1297,13 @@
                         removePendingChat(chatId);
                         persistActiveChatMessages();
                         if (assistantMessage.text?.trim()) {
-                            void speakText(assistantMessage);
-                        } else {
+                            if (autoGenerateAudio) {
+                                void generateAudioForMessage(assistantMessage.id, -1, {
+                                    autoplay: true,
+                                    notifyOnSkip: false
+                                });
+                            }
+                        } else if (autoGenerateAudio) {
                             console.warn('Skipping TTS: empty text');
                         }
                     }
@@ -1684,20 +1719,61 @@
         }
     };
 
-    async function speakText(message: Message) {
+    async function generateAudioForMessage(
+        messageId: string | undefined,
+        messageIndex = -1,
+        options?: { autoplay?: boolean; notifyOnSkip?: boolean }
+    ) {
+        const target = findMessageForAudio(messageId, messageIndex);
+        if (!target) {
+            if (options?.notifyOnSkip) {
+                notifyApiError('Text-to-speech unavailable', 'Unable to locate that message.');
+            } else {
+                console.warn('Skipping TTS: message not found');
+            }
+            return;
+        }
+
+        if (target.audio?.dataUrl) {
+            if (options?.notifyOnSkip) {
+                notifyApiError('Text-to-speech ready', 'Audio already generated for this response.');
+            }
+            return;
+        }
+
+        if (target.audioStatus === 'loading') {
+            if (options?.notifyOnSkip) {
+                notifyApiError('Text-to-speech pending', 'Audio is currently being prepared.');
+            }
+            return;
+        }
+
         const configuredVoiceId = currentModel?.voiceId ?? DEFAULT_TTS_VOICE_ID;
         const voiceId = configuredVoiceId?.trim();
 
         if (!voiceId) {
-            console.warn('Skipping TTS: no voice configured');
+            if (options?.notifyOnSkip) {
+                notifyApiError(
+                    'Text-to-speech unavailable',
+                    'Assign a voice to this model in the Live2D manager.'
+                );
+            } else {
+                console.warn('Skipping TTS: no voice configured');
+            }
             return;
         }
 
-        const speakableText = stripThinkingTags(message.text ?? message.raw ?? '').trim();
+        const speakableText = stripThinkingTags(target.text ?? target.raw ?? '').trim();
         if (!speakableText) {
-            console.warn('Skipping TTS: no speakable text');
+            if (options?.notifyOnSkip) {
+                notifyApiError('Text-to-speech unavailable', 'This response has no speakable text.');
+            } else {
+                console.warn('Skipping TTS: no speakable text');
+            }
             return;
         }
+
+        setAudioStatus(target.id, 'loading');
 
         try {
             const res = await fetch('/api/tts', {
@@ -1709,6 +1785,7 @@
                 const payload = await res.json().catch(() => null);
                 console.error('TTS error', res.status, payload);
                 notifyApiError('Text-to-speech failed', payload?.error ?? 'Unable to generate speech');
+                setAudioStatus(target.id, 'idle');
                 return;
             }
 
@@ -1716,6 +1793,7 @@
             if (!arrayBuffer.byteLength) {
                 console.warn('TTS response was empty');
                 notifyApiError('Text-to-speech failed', 'Generated audio was empty.');
+                setAudioStatus(target.id, 'idle');
                 return;
             }
 
@@ -1728,6 +1806,7 @@
             } catch (encodeError) {
                 console.error('Failed to encode audio for storage', encodeError);
                 notifyApiError('Text-to-speech failed', 'Unable to cache generated audio.');
+                setAudioStatus(target.id, 'idle');
                 return;
             }
 
@@ -1738,17 +1817,23 @@
                 createdAt: Date.now(),
                 size: arrayBuffer.byteLength
             };
-            updateMessageAudio(message.id, audioPayload);
+            updateMessageAudio(target.id, audioPayload);
+
+            if (options?.autoplay === false) {
+                setAudioStatus(target.id, 'idle');
+                return;
+            }
 
             if (audioData.blob) {
-                await playAudioSource({ kind: 'blob', blob: audioData.blob }, message.id);
+                await playAudioSource({ kind: 'blob', blob: audioData.blob }, target.id);
             } else {
-                await playAudioSource({ kind: 'buffer', buffer: arrayBuffer, mimeType }, message.id);
+                await playAudioSource({ kind: 'buffer', buffer: arrayBuffer, mimeType }, target.id);
             }
         } catch (e) {
             const messageError = e instanceof Error ? e.message : 'Unable to generate speech';
             notifyApiError('Text-to-speech failed', messageError);
-            console.error('speakText failed', e);
+            console.error('generateAudioForMessage failed', e);
+            setAudioStatus(target.id, 'idle');
         }
     }
 
@@ -1951,6 +2036,7 @@
                             on:thinkingToggle={handleMessageThinkingToggle}
                             on:playAudio={handleMessageAudioPlay}
                             on:stopAudio={handleMessageAudioStop}
+                            on:generateAudio={handleMessageAudioGenerate}
                         />
 
                         <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
@@ -2028,7 +2114,36 @@
                             on:next={nextModel}
                             on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
                         />
-                       
+                        <div class="mt-4 flex flex-col gap-3 rounded-3xl border border-surface-800/50 bg-surface-950/70 p-4 shadow-lg shadow-surface-950/20">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="flex flex-col">
+                                    <span class="text-sm font-semibold text-surface-100">Auto-generate audio</span>
+                                    <span class="text-xs text-surface-400">Create TTS for new replies automatically.</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    class={`relative inline-flex h-6 w-12 items-center rounded-full border transition ${
+                                        autoGenerateAudio
+                                            ? 'border-primary-400 bg-primary-500/80'
+                                            : 'border-surface-700 bg-surface-900/80'
+                                    }`}
+                                    role="switch"
+                                    aria-checked={autoGenerateAudio}
+                                    aria-label="Toggle automatic audio generation"
+                                    on:click={toggleAutoGenerateAudio}
+                                >
+                                    <span
+                                        class={`pointer-events-none absolute left-1 h-4 w-4 rounded-full bg-surface-950 shadow-sm shadow-surface-950/60 transition-transform duration-150 ease-out ${
+                                            autoGenerateAudio ? 'translate-x-5' : ''
+                                        }`}
+                                    ></span>
+                                </button>
+                            </div>
+                            <p class="text-xs text-surface-400">
+                                When off, use the Generate audio button on responses whenever you need TTS.
+                            </p>
+                        </div>
+
                     </aside>
                 </div>
             </div>

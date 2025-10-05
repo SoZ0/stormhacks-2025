@@ -38,10 +38,16 @@
     messageIndex: number;
   };
 
+  type AudioGeneratePayload = {
+    messageId?: string;
+    messageIndex: number;
+  };
+
   const dispatch = createEventDispatcher<{
     thinkingToggle: ThinkingTogglePayload;
     playAudio: AudioPlayPayload;
     stopAudio: AudioStopPayload;
+    generateAudio: AudioGeneratePayload;
   }>();
 
   export let messages: ChatDisplayMessage[] = [];
@@ -152,6 +158,13 @@
     });
   };
 
+  const handleAudioGenerate = (message: ChatDisplayMessage, messageIndex: number) => {
+    dispatch('generateAudio', {
+      messageId: message.id,
+      messageIndex
+    });
+  };
+
   const audioDownloadName = (message: ChatDisplayMessage, index: number): string => {
     const suffix = message.id ? message.id.slice(0, 8) : `msg-${index}`;
     const mime = message.audio?.mimeType ?? 'audio/mpeg';
@@ -217,55 +230,78 @@
 					<span class="h-4 w-2 animate-pulse rounded-full bg-primary-100" style="animation-delay: 240ms"></span>
 				</div>
 			{/if}
-			{#if item.message.sender === 'bot' && item.message.audio?.dataUrl}
-				<div class="flex flex-col items-end gap-2">
-					{#if item.message.audioStatus === 'loading'}
-						<div class="flex items-center gap-2 text-xs text-surface-400">
-							<span class="h-3 w-3 animate-spin rounded-full border border-surface-600 border-t-primary-400"></span>
-							<span>Preparing audio…</span>
+			{#if item.message.sender === 'bot'}
+				{#if item.message.audio?.dataUrl}
+					<div class="flex flex-col items-end gap-2">
+						{#if item.message.audioStatus === 'loading'}
+							<div class="flex items-center gap-2 text-xs text-surface-400">
+								<span class="h-3 w-3 animate-spin rounded-full border border-surface-600 border-t-primary-400"></span>
+								<span>Preparing audio…</span>
+							</div>
+						{/if}
+						<div class="flex justify-end gap-2">
+							<button
+								type="button"
+								class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200 disabled:cursor-not-allowed disabled:opacity-60"
+								on:click={() => handleAudioPlay(item.message, index)}
+								aria-label="Play response audio"
+								disabled={item.message.audioStatus === 'loading'}
+							>
+								<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+									<path d="M5 10v4h2l3 3V7L7 10H5zm9.14-3.17a1 1 0 0 1 1.37.36A6.98 6.98 0 0 1 17 12a6.98 6.98 0 0 1-1.49 4.81 1 1 0 0 1-1.73-1.01A4.98 4.98 0 0 0 15 12a4.97 4.97 0 0 0-.78-2.68 1 1 0 0 1 .08-1.49l.84-.83z" />
+									<path d="M16.55 5.55a1 1 0 1 1 1.41-1.42A9 9 0 0 1 20 12a9 9 0 0 1-2.04 5.87 1 1 0 1 1-1.58-1.23A7 7 0 0 0 18 12a7 7 0 0 0-1.45-4.32l-.01-.01-.01-.01z" />
+								</svg>
+								<span>{item.message.audioStatus === 'playing' ? 'Replay' : 'Play'}</span>
+							</button>
+							{#if item.message.audioStatus === 'playing'}
+								<button
+									type="button"
+									class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-error-400 hover:text-error-200"
+									on:click={() => handleAudioStop(item.message, index)}
+									aria-label="Stop audio playback"
+								>
+									<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+										<path d="M6 6h12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z" />
+									</svg>
+									<span>Stop</span>
+								</button>
+							{/if}
+							<a
+								href={item.message.audio.dataUrl}
+								download={audioDownloadName(item.message, index)}
+								class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200"
+								aria-label="Download response audio"
+							>
+								<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+									<path d="M12 3a1 1 0 0 1 1 1v9.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1z" />
+									<path d="M5 15a1 1 0 0 1 1 1v2h12v-2a1 1 0 1 1 2 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
+								</svg>
+								<span>Download</span>
+							</a>
 						</div>
-					{/if}
-					<div class="flex justify-end gap-2">
+					</div>
+				{:else}
+					<div class="flex flex-col items-end gap-2">
+						{#if item.message.audioStatus === 'loading'}
+							<div class="flex items-center gap-2 text-xs text-surface-400">
+								<span class="h-3 w-3 animate-spin rounded-full border border-surface-600 border-t-primary-400"></span>
+								<span>Generating audio…</span>
+							</div>
+						{/if}
 						<button
 							type="button"
-							class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200 disabled:opacity-60 disabled:cursor-not-allowed"
-							on:click={() => handleAudioPlay(item.message, index)}
-							aria-label="Play response audio"
+							class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200 disabled:cursor-not-allowed disabled:opacity-60"
+							on:click={() => handleAudioGenerate(item.message, index)}
+							aria-label="Generate response audio"
 							disabled={item.message.audioStatus === 'loading'}
 						>
 							<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-								<path d="M5 10v4h2l3 3V7L7 10H5zm9.14-3.17a1 1 0 0 1 1.37.36A6.98 6.98 0 0 1 17 12a6.98 6.98 0 0 1-1.49 4.81 1 1 0 0 1-1.73-1.01A4.98 4.98 0 0 0 15 12a4.97 4.97 0 0 0-.78-2.68 1 1 0 0 1 .08-1.49l.84-.83z" />
-								<path d="M16.55 5.55a1 1 0 1 1 1.41-1.42A9 9 0 0 1 20 12a9 9 0 0 1-2.04 5.87 1 1 0 1 1-1.58-1.23A7 7 0 0 0 18 12a7 7 0 0 0-1.45-4.32l-.01-.01-.01-.01z" />
+								<path d="M12 3a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H6a1 1 0 0 1 0-2h5V4a1 1 0 0 1 1-1z" />
 							</svg>
-							<span>{item.message.audioStatus === 'playing' ? 'Replay' : 'Play'}</span>
+							<span>Generate audio</span>
 						</button>
-						{#if item.message.audioStatus === 'playing'}
-							<button
-								type="button"
-								class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-error-400 hover:text-error-200"
-								on:click={() => handleAudioStop(item.message, index)}
-								aria-label="Stop audio playback"
-							>
-								<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-									<path d="M6 6h12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z" />
-								</svg>
-								<span>Stop</span>
-							</button>
-						{/if}
-						<a
-							href={item.message.audio.dataUrl}
-							download={audioDownloadName(item.message, index)}
-							class="inline-flex items-center gap-2 rounded-full border border-surface-700/60 bg-surface-900/60 px-3 py-1 text-xs font-medium text-surface-200 transition hover:border-primary-400 hover:text-primary-200"
-							aria-label="Download response audio"
-						>
-							<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-								<path d="M12 3a1 1 0 0 1 1 1v9.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42L11 13.59V4a1 1 0 0 1 1-1z" />
-								<path d="M5 15a1 1 0 0 1 1 1v2h12v-2a1 1 0 1 1 2 0v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
-							</svg>
-							<span>Download</span>
-						</a>
 					</div>
-				</div>
+				{/if}
 			{/if}
 		</div>
 	{/each}
