@@ -81,7 +81,7 @@
   if (typeof window !== 'undefined') {
     browserSpeechSupported = Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition);
     offlineSpeechSupported = isOfflineSpeechSupported();
-    speechSupported = browserSpeechSupported || offlineSpeechSupported;
+    speechSupported = false; // Disable microphone regardless of support
   }
 
   const appendTranscript = (current: string, addition: string): string => {

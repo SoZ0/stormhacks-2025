@@ -300,19 +300,40 @@ const formatHistoryTimestamp = (timestamp: string | undefined): string | null =>
   return timestamp.trim() ? timestamp : null;
 };
 
+const DATE_TIME_INSTRUCTION =
+  'Do not repeat the appended date and time in your responses unless the user explicitly requests it.';
+
 const normalizeHistory = (messages: ClientMessage[], systemPrompt?: string): ProviderMessage[] => {
   const history: ProviderMessage[] = [];
 
-  if (typeof systemPrompt === 'string' && systemPrompt.trim()) {
-    history.push({ role: 'system', content: systemPrompt.trim() });
+  const trimmedPrompt = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+  const promptIncludesInstruction = trimmedPrompt.includes(DATE_TIME_INSTRUCTION);
+  const finalPrompt = promptIncludesInstruction
+    ? trimmedPrompt
+    : trimmedPrompt
+        ? `${trimmedPrompt}\n\n${DATE_TIME_INSTRUCTION}`
+        : DATE_TIME_INSTRUCTION;
+
+  if (finalPrompt) {
+    history.push({ role: 'system', content: finalPrompt });
   }
 
   for (const message of messages) {
     const timestamp = formatHistoryTimestamp(message.timestamp);
     const prefix = timestamp ? `[${timestamp}] ` : '';
+    const role = message.sender === 'user' ? 'user' : 'assistant';
+    const baseContent = `${prefix}${message.text}`;
+    let content = baseContent;
+
+    if (role === 'user') {
+      const appendedTimestamp = timestamp ?? new Date().toISOString();
+      const suffix = `Current date and time: ${appendedTimestamp}`;
+      content = baseContent ? `${baseContent}\n\n${suffix}` : suffix;
+    }
+
     const entry: ProviderMessage = {
-      role: message.sender === 'user' ? 'user' : 'assistant',
-      content: `${prefix}${message.text}`
+      role,
+      content
     };
 
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
