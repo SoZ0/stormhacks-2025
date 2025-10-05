@@ -1,38 +1,37 @@
-# sv
+# StormHacks Web + Desktop
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+This directory contains the SvelteKit front-end used by both the web deployment and the Tauri-powered desktop application.
 
-## Creating a project
+## Requirements
 
-If you're seeing this, you've probably already done this step. Congrats!
+- [Bun](https://bun.sh/) (recommended for scripts and dependency management)
+- [Rust](https://www.rust-lang.org/tools/install) toolchain with `cargo`
+- Platform build requirements for [Tauri 1.x](https://tauri.app/start/prerequisites/)
 
-```sh
-# create a new project in the current directory
-bunx sv create
+## Scripts
 
-# create a new project in my-app
-bunx sv create my-app
-```
+- `bun run dev` – start the Vite/SvelteKit dev server
+- `bun run build` – build the web bundle using the configured adapter
+- `bun run tauri:dev` – launch the Tauri shell pointing at the dev server
+- `bun run tauri:build` – create desktop bundles (Windows + Linux, including AppImage)
 
-## Developing
+Tauri builds automatically rerun `bun run tauri:build:frontend` to produce a static SvelteKit build with the correct adapter and asset base path.
 
-Once you've created a project and installed dependencies with `bun install`, start a development server:
+## Desktop Packaging Targets
 
-```sh
-bun run dev
+The Tauri configuration (`src-tauri/tauri.conf.json`) enables the following bundles:
 
-# or start the server and open the app in a new browser tab
-bun run dev -- --open
-```
+- Windows: `msi` and `nsis`
+- Linux: `deb`, `rpm`, and `appimage`
 
-## Building
+When building on Linux, ensure the WebKitGTK stack (`libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libayatana-appindicator3-1`) is available on the host system. On Windows, at least one of the WiX Toolset or NSIS should be present for their respective installers.
 
-To create a production version of your app:
+For cross-compilation guidance and additional target-specific prerequisites, see the [Tauri bundler docs](https://tauri.app/start/prerequisites/#bundler-prerequisites).
 
-```sh
-bun run build
-```
+## Development Flow
 
-You can preview the production build with `bun run preview`.
+1. Install dependencies with `bun install`
+2. Run `bun run dev` for browser development, or `bun run tauri:dev` for the desktop shell
+3. When ready to package, run `bun run tauri:build`
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+The desktop build outputs live under `src-tauri/target/release/bundle`.

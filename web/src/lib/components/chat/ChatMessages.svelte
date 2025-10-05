@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatMessagePayload } from '$lib/llm/client';
+  import type { ThinkingMode } from '$lib/chat/types';
   import { markdownToHtml } from '$lib/utils/markdown';
   import { afterUpdate, createEventDispatcher, onMount, tick } from 'svelte';
 
@@ -51,6 +52,7 @@
   }>();
 
   export let messages: ChatDisplayMessage[] = [];
+  export let thinkingMode: ThinkingMode = 'auto';
 
   const stripThinkingTags = (value: string) => value.replace(/<\/?think>/gi, '').trim();
 
@@ -107,6 +109,9 @@
       openStates: computeOpenStates(message, thinkingBlocks)
     };
   });
+
+  const shouldRenderThinking = (message: ChatDisplayMessage, blocks: string[]): boolean =>
+    thinkingMode !== 'hidden' && message.sender === 'bot' && blocks.length > 0;
 
   let container: HTMLDivElement | null = null;
   let stickToBottom = true;
@@ -202,7 +207,7 @@
              }`
             }
         >
-			{#if item.message.sender === 'bot' && item.thinkingBlocks.length}
+			{#if shouldRenderThinking(item.message, item.thinkingBlocks)}
 				{#each item.thinkingBlocks as block, blockIndex}
 					<details
 						class="group rounded-xl border border-surface-800/50 bg-surface-900/70 px-5 py-5 text-[13px] leading-relaxed text-surface-300"

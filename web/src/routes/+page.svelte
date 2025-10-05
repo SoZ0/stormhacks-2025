@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onDestroy, onMount } from 'svelte';
     import { browser } from '$app/environment';
-    import { resolve } from '$app/paths';
     import {
         fetchProviders,
         fetchProviderSettings,
@@ -23,6 +22,7 @@
     } from '$lib/components/chat/ChatProviderControls.svelte';
     import ChatInput from '$lib/components/chat/ChatInput.svelte';
     import PromptSettingsModal from '$lib/components/chat/PromptSettingsModal.svelte';
+    import LlmSettingsModal from '$lib/components/chat/LlmSettingsModal.svelte';
     import ModelPreviewPanel, { type ModelPreviewState } from '$lib/components/chat/ModelPreviewPanel.svelte';
     import type { ModelOption } from '$lib/chat/types';
     import Live2DModelManager from '$lib/components/live2d/Live2DModelManager.svelte';
@@ -975,6 +975,7 @@
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
     let isPromptSettingsOpen = false;
+    let isLlmSettingsOpen = false;
 
     const updateSystemPrompt = (value: string) => {
         systemPrompt = value;
@@ -1059,6 +1060,14 @@
 
     const closePromptSettings = () => {
         isPromptSettingsOpen = false;
+    };
+
+    const openLlmSettings = () => {
+        isLlmSettingsOpen = true;
+    };
+
+    const closeLlmSettings = () => {
+        isLlmSettingsOpen = false;
     };
 
     const startNewChat = () => {
@@ -2015,7 +2024,6 @@
 
         <ChatSidebar
             {isCollapsed}
-            settingsHref={resolve('/settings')}
             {isPersistingSettings}
             {settingsPersistError}
             {chats}
@@ -2025,6 +2033,7 @@
             on:selectChat={({ detail }) => setActiveChat(detail)}
             on:renameChat={({ detail }) => renameChat(detail.id, detail.title)}
             on:deleteChat={({ detail }) => deleteChat(detail)}
+            on:openSettings={openLlmSettings}
         />
 
         <main class="relative z-10 flex-1 overflow-hidden min-h-0">
@@ -2223,6 +2232,11 @@
     on:updated={handleModelManagerUpdated}
     on:deleted={handleModelManagerDeleted}
     on:draftChange={handleModelManagerDraft}
+/>
+
+<LlmSettingsModal
+    open={isLlmSettingsOpen}
+    on:close={closeLlmSettings}
 />
 
 <PromptSettingsModal
