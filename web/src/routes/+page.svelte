@@ -8,6 +8,7 @@
         saveProviderSettings,
         streamChatMessage,
         checkToolSupport,
+        type ChatAttachmentPayload,
         type ChatMessagePayload,
         type ChatStreamEvent
     } from '$lib/llm/client';
@@ -81,6 +82,70 @@
         return `chat-${Math.random().toString(36).slice(2)}`;
     };
 
+
+    const sanitizeAttachment = (attachment: ChatAttachmentPayload | null | undefined): ChatAttachmentPayload | null => {
+        if (!attachment || typeof attachment !== 'object') {
+            return null;
+        }
+
+        const dataUrl = typeof attachment.dataUrl === 'string' ? attachment.dataUrl : '';
+        if (!dataUrl.trim()) {
+            return null;
+        }
+
+        const name =
+            typeof attachment.name === 'string' && attachment.name.trim()
+                ? attachment.name.trim()
+                : 'attachment';
+        const mimeType =
+            typeof attachment.mimeType === 'string' && attachment.mimeType.trim()
+                ? attachment.mimeType.trim()
+                : 'application/octet-stream';
+        const size =
+            Number.isFinite(attachment.size) && attachment.size > 0
+                ? Math.floor(attachment.size)
+                : 0;
+        const id =
+            typeof attachment.id === 'string' && attachment.id.trim()
+                ? attachment.id.trim()
+                : createAttachmentId();
+
+        return { id, name, mimeType, size, dataUrl };
+    };
+
+    const cloneAttachments = (list: ChatAttachmentPayload[] | null | undefined): ChatAttachmentPayload[] =>
+        Array.isArray(list)
+            ? list
+                  .map((attachment) => sanitizeAttachment(attachment))
+                  .filter((attachment): attachment is ChatAttachmentPayload => Boolean(attachment))
+            : [];
+
+    const createAttachmentId = () => `att-${createMessageId()}`;
+
+    const createMessageTimestamp = () => new Date().toISOString();
+
+    const normalizeMessageTimestamp = (value: unknown): string => {
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (trimmed) {
+                const parsed = new Date(trimmed);
+                if (!Number.isNaN(parsed.getTime())) {
+                    return parsed.toISOString();
+                }
+                return trimmed;
+            }
+        }
+
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            const parsed = new Date(value);
+            if (!Number.isNaN(parsed.getTime())) {
+                return parsed.toISOString();
+            }
+        }
+
+        return createMessageTimestamp();
+    };
+
     interface ChatSummary {
         id: string;
         title: string;
@@ -101,6 +166,16 @@
         const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % themeOptions.length;
         theme.set(themeOptions[nextIndex]?.id ?? themeOptions[0]?.id ?? 'stormhacks');
     };
+
+    const DESKTOP_MEDIA_QUERY = '(min-width: 1280px)';
+    let desktopMedia: MediaQueryList | null = null;
+    let isDesktop = false;
+    let cleanupDesktopMedia: (() => void) | null = null;
+
+    if (browser && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+        desktopMedia = window.matchMedia(DESKTOP_MEDIA_QUERY);
+        isDesktop = desktopMedia.matches;
+    }
 
     const extractMessageParts = (
         raw: string
@@ -280,13 +355,22 @@
 
     const sanitizeMessageForStore = (message: Message): Message => {
         const id = message.id ?? createMessageId();
+        const timestamp = normalizeMessageTimestamp((message as { timestamp?: unknown }).timestamp);
         const thinkingBlocks = resolveThinkingBlocks(message);
         const sanitized: Message = {
             ...message,
             id,
+            timestamp,
             streaming: false,
             audioStatus: 'idle'
         };
+
+        const attachments = cloneAttachments(message.attachments);
+        if (attachments.length) {
+            sanitized.attachments = attachments;
+        } else {
+            delete sanitized.attachments;
+        }
 
         applyThinkingBlocks(sanitized, thinkingBlocks, { defaultOpen: false });
         return sanitized;
@@ -564,6 +648,7 @@
 
         activeChatId = id;
         input = '';
+        pendingAttachments = [];
         error = null;
         isSending = false;
         applyChatConfig(id);
@@ -615,6 +700,7 @@
     let modelPreviewState: ModelPreviewState = { models: [], index: 0, current: null };
     let activeMobileModel: ModelOption | null = null;
     let mobilePreviewConfig: Live2DPreviewConfig | null = null;
+    let mobilePreviewLoading = false;
     const live2dDraftOriginals = new Map<string, ModelOption>();
     const FALLBACK_LIVE2D_MODEL_IDS = ['builtin-huohuo', 'builtin-hiyori', 'builtin-miku'];
 
@@ -698,6 +784,23 @@
         switch (provider.kind) {
             case 'ollama':
                 return true;
+            default:
+                return false;
+        }
+    };
+
+    const modelSupportsImages = (provider: ProviderConfig | null, modelId: string): boolean => {
+        if (!provider || !modelId.trim()) {
+            return false;
+        }
+
+        const normalized = modelId.trim().toLowerCase();
+
+        switch (provider.kind) {
+            case 'ollama':
+                return /(^|[-_])(vision|llava|moondream|mllm|pixtral|clip|siglip|image|flux)([-_]|$)/.test(normalized);
+            case 'gemini':
+                return /-vision\b/.test(normalized) || normalized.startsWith('gemini-1.5-') || normalized.includes('-flash');
             default:
                 return false;
         }
@@ -799,10 +902,14 @@
     };
     let sfuToolsEnabled: boolean | null = null;
     let sfuToolsChecking = false;
+    let imageSupportEnabled: boolean | null = null;
     let toolSupportOverrideForSelection: boolean | undefined;
 
     let isCollapsed = false;
     let isSending = false;
+    let activeStreamController: AbortController | null = null;
+    let userCancelledCurrentStream = false;
+    let activeAssistantMessage: Message | null = null;
     let isPersistingSettings = false;
     let error: string | null = null;
     let settingsLoadError: string | null = null;
@@ -987,7 +1094,57 @@
             notifyOnSkip: true
         });
     };
+
+    const handleAttachmentsAdd = (event: CustomEvent<ChatAttachmentPayload[]>) => {
+        const additions = Array.isArray(event.detail) ? event.detail : [];
+        if (!additions.length) {
+            return;
+        }
+
+        const existingIds = new Set(pendingAttachments.map((attachment) => attachment.id));
+        const normalized: ChatAttachmentPayload[] = [];
+
+        for (const attachment of additions) {
+            const sanitized = sanitizeAttachment(attachment);
+            if (!sanitized) {
+                continue;
+            }
+
+            while (existingIds.has(sanitized.id)) {
+                sanitized.id = createAttachmentId();
+            }
+            existingIds.add(sanitized.id);
+            normalized.push(sanitized);
+        }
+
+        if (!normalized.length) {
+            return;
+        }
+
+        pendingAttachments = [...pendingAttachments, ...normalized];
+    };
+
+    const handleAttachmentRemove = (event: CustomEvent<string>) => {
+        const id = (event.detail ?? '').trim();
+        if (!id) {
+            return;
+        }
+        pendingAttachments = pendingAttachments.filter((attachment) => attachment.id !== id);
+    };
+
+    const handleAttachmentError = (event: CustomEvent<string>) => {
+        const description = (event.detail ?? '').toString().trim();
+        if (!description) {
+            return;
+        }
+        toaster.error({
+            title: 'Attachment error',
+            description,
+            duration: 5000
+        });
+    };
     let input = "";
+    let pendingAttachments: ChatAttachmentPayload[] = [];
     let systemPrompt = '';
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
     let isPromptSettingsOpen = false;
@@ -1090,6 +1247,7 @@
         const id = createAndActivateChat();
         error = null;
         input = '';
+        pendingAttachments = [];
         isSending = false;
         removePendingChat(id);
     };
@@ -1199,7 +1357,8 @@
 
     const sendMessage = async () => {
         const trimmed = input.trim();
-        if (!trimmed || isSending) return;
+        const hasAttachments = pendingAttachments.length > 0;
+        if ((trimmed.length === 0 && !hasAttachments) || isSending) return;
         if (!selectedModel) {
             error = 'Select a model before sending a message.';
             return;
@@ -1218,6 +1377,8 @@
         }
         const chatId = activeChatId || createAndActivateChat({ preserveCurrent: false });
 
+        const userTimestamp = createMessageTimestamp();
+        const messageAttachments = cloneAttachments(pendingAttachments);
         const userMessage: Message = {
             id: createMessageId(),
             sender: 'user',
@@ -1225,19 +1386,38 @@
             raw: trimmed,
             hasThinking: false,
             thinkingOpen: false,
-            audioStatus: 'idle'
+            audioStatus: 'idle',
+            timestamp: userTimestamp
         };
 
+        if (messageAttachments.length) {
+            userMessage.attachments = messageAttachments;
+        }
+
         const nextMessages: Message[] = [...messages, userMessage];
-        const payload: ChatMessagePayload[] = nextMessages.map(({ sender, raw, text }) => ({
-            sender: sender === 'user' ? 'user' : 'bot',
-            text: String(raw ?? text ?? '')
-        }));
+        const payload: ChatMessagePayload[] = nextMessages.map(
+            ({ sender, raw, text, timestamp, attachments }) => {
+                const entry: ChatMessagePayload = {
+                    sender: sender === 'user' ? 'user' : 'bot',
+                    text: String(raw ?? text ?? ''),
+                    timestamp: normalizeMessageTimestamp(timestamp)
+                };
+                const cloned = cloneAttachments(attachments);
+                if (cloned.length) {
+                    entry.attachments = cloned;
+                }
+                return entry;
+            }
+        );
 
         messages = nextMessages;
+        pendingAttachments = [];
         input = '';
         error = null;
         isSending = true;
+        userCancelledCurrentStream = false;
+        const streamController = new AbortController();
+        activeStreamController = streamController;
         addPendingChat(chatId);
 
         const derivedTitle = deriveChatTitle(nextMessages);
@@ -1252,18 +1432,20 @@
         persistActiveChatMessages();
 
         const streamAttempt = async (useTools: boolean) => {
-        const assistantMessage: Message = {
-            id: createMessageId(),
-            sender: 'bot',
-            text: '',
-            raw: '',
-            streaming: true,
-            hasThinking: false,
-            thinkingOpen: true,
-            thinkingOpenStates: [],
-            audioStatus: 'idle'
-        };
+            const assistantMessage: Message = {
+                id: createMessageId(),
+                sender: 'bot',
+                text: '',
+                raw: '',
+                streaming: true,
+                hasThinking: false,
+                thinkingOpen: true,
+                thinkingOpenStates: [],
+                audioStatus: 'idle',
+                timestamp: createMessageTimestamp()
+            };
 
+            activeAssistantMessage = assistantMessage;
             messages = [...nextMessages, assistantMessage];
 
             const updateAssistant = (updater: (current: Message) => Message) => {
@@ -1320,6 +1502,7 @@
                         });
                         assistantMessage.streaming = false;
                         updateAssistant(() => ({ ...assistantMessage }));
+                        activeAssistantMessage = null;
                         removePendingChat(chatId);
                         persistActiveChatMessages();
                         if (assistantMessage.text?.trim()) {
@@ -1338,13 +1521,15 @@
                         throw new Error(event.message ?? 'An unexpected error occurred');
                     }
                 },
-                useTools
+                useTools,
+                streamController.signal
             );
         };
 
         const handleStreamFailure = (message: string) => {
             error = message;
             messages = nextMessages;
+            activeAssistantMessage = null;
             persistActiveChatMessages();
             notifyApiError('Chat request failed', error);
         };
@@ -1352,6 +1537,45 @@
         try {
             await streamAttempt(shouldUseTools);
         } catch (err) {
+            const isAbortError =
+                err instanceof DOMException
+                    ? err.name === 'AbortError'
+                    : err instanceof Error && err.name === 'AbortError';
+
+            if (isAbortError) {
+                if (userCancelledCurrentStream) {
+                    if (activeAssistantMessage) {
+                        const identifier = activeAssistantMessage.id;
+                        activeAssistantMessage.streaming = false;
+                        const hasContent = Boolean(
+                            (activeAssistantMessage.text ?? '').trim() ||
+                                (activeAssistantMessage.raw ?? '').trim()
+                        );
+                        if (hasContent) {
+                            const snapshot = { ...activeAssistantMessage, streaming: false };
+                            messages = messages.map((message) =>
+                                message.id === identifier
+                                    ? snapshot
+                                    : message
+                            );
+                            activeAssistantMessage = null;
+                        } else {
+                            messages = nextMessages;
+                            activeAssistantMessage = null;
+                        }
+                    } else {
+                        messages = nextMessages;
+                        activeAssistantMessage = null;
+                    }
+                    error = null;
+                    persistActiveChatMessages({ updateTimestamp: false });
+                    return;
+                }
+
+                handleStreamFailure('The request was cancelled. Please try again.');
+                return;
+            }
+
             const message = err instanceof Error ? err.message : 'An unexpected error occurred';
             const normalized = message.toLowerCase();
             const toolUnsupported = shouldUseTools && normalized.includes('does not support tools');
@@ -1359,6 +1583,7 @@
             if (toolUnsupported) {
                 recordToolSupport(requestProviderId, requestModelId, false);
                 messages = nextMessages;
+                activeAssistantMessage = null;
                 persistActiveChatMessages();
                 error = null;
 
@@ -1379,10 +1604,37 @@
         } finally {
             isSending = false;
             removePendingChat(chatId);
+            activeStreamController = null;
+            activeAssistantMessage = null;
+            userCancelledCurrentStream = false;
         }
     };
 
     const DEFAULT_TTS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
+
+    const cancelGeneration = () => {
+        if (!isSending) {
+            return;
+        }
+        const controller = activeStreamController;
+        if (!controller || controller.signal.aborted) {
+            return;
+        }
+
+        userCancelledCurrentStream = true;
+        try {
+            controller.abort();
+        } catch (err) {
+            console.warn('Failed to abort active stream', err);
+        }
+
+        if (activeAssistantMessage) {
+            const snapshot = { ...activeAssistantMessage, streaming: false };
+            messages = messages.map((message) =>
+                message.id === snapshot.id ? snapshot : message
+            );
+        }
+    };
 
     const notifyApiError = (title: string, description?: string) => {
         toaster.error({
@@ -1870,6 +2122,22 @@
             isCollapsed = true;
         }
 
+        if (desktopMedia) {
+            const listener = (event: MediaQueryListEvent) => {
+                isDesktop = event.matches;
+            };
+
+            if (typeof desktopMedia.addEventListener === 'function') {
+                desktopMedia.addEventListener('change', listener);
+                cleanupDesktopMedia = () => desktopMedia?.removeEventListener('change', listener);
+            } else if (typeof desktopMedia.addListener === 'function') {
+                desktopMedia.addListener(listener);
+                cleanupDesktopMedia = () => desktopMedia?.removeListener(listener);
+            }
+
+            isDesktop = desktopMedia.matches;
+        }
+
         if (browser) {
             const loaded = loadChatState();
 
@@ -1910,6 +2178,8 @@
     });
 
     onDestroy(() => {
+        cleanupDesktopMedia?.();
+        cleanupDesktopMedia = null;
         cleanupActiveAudio();
         void stopMouthTracking();
     });
@@ -1935,7 +2205,7 @@
         current: live2dModels[previewIndex] ?? currentModel
     };
     $: activeMobileModel = modelPreviewState.current ?? modelPreviewState.models[modelPreviewState.index] ?? null;
-    $: mobilePreviewConfig = activeMobileModel
+    $: mobilePreviewConfig = !isDesktop && activeMobileModel
         ? {
               modelPath: activeMobileModel.modelPath,
               cubismCorePath: activeMobileModel.cubismCorePath,
@@ -1947,6 +2217,9 @@
               localModelId: activeMobileModel.storage === 'local' ? activeMobileModel.id : null
           }
         : null;
+    $: if (!mobilePreviewConfig) {
+        mobilePreviewLoading = false;
+    }
     $: currentProvider = providers.find((provider) => provider.id === selectedProviderId) ?? defaultProvider;
     $: computedProvidersError = providersError ?? (providers.length === 0 && !providersLoading
             ? 'No providers found. Visit settings to add one.'
@@ -1981,6 +2254,7 @@
             ? toolSupportOverrideForSelection
             : modelSupportsSfuTools(currentProvider, selectedModel, toolSupportOverrides)
         : null;
+    $: imageSupportEnabled = selectedModel ? modelSupportsImages(currentProvider, selectedModel) : null;
     $: if (selectedProviderId && selectedModel) {
         void ensureToolSupportStatus(selectedProviderId, selectedModel);
     }
@@ -2058,13 +2332,13 @@
         background="bg-surface-950/70"
         border="border-b border-surface-800/50"
         shadow="shadow-lg shadow-surface-950/30"
-        padding="px-4 py-4 lg:px-8"
+        padding="px-3 py-2 sm:px-4 sm:py-3 lg:px-8 lg:py-4"
         classes="sticky top-0 z-40 backdrop-blur-xl"
     >
-        <p class="text-sm text-surface-400">Harness your favourite models, orchestrate study plans, and learn faster.</p>
+        <p class="hidden text-sm text-surface-400 sm:block">Harness your favourite models, orchestrate study plans, and learn faster.</p>
     </AppBar>
 
-    <div class="relative flex flex-1 overflow-hidden p-4 gap-4">
+    <div class="relative flex flex-1 overflow-hidden gap-3 p-3 sm:gap-4 sm:p-4">
         {#if !isCollapsed}
             <button
                 type="button"
@@ -2097,8 +2371,15 @@
                                 <div class="pointer-events-none absolute inset-0 overflow-hidden opacity-40 xl:hidden">
                                     <Live2DPreview
                                         config={mobilePreviewConfig}
+                                        bind:loading={mobilePreviewLoading}
                                         bind:expressions={expressionOptions}
                                     />
+                                    {#if mobilePreviewLoading}
+                                        <div class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-surface-950/40">
+                                            <div class="h-9 w-9 animate-spin rounded-full border-2 border-primary-400/80 border-t-transparent" aria-hidden="true"></div>
+                                            <span class="sr-only">Loading model preview…</span>
+                                        </div>
+                                    {/if}
                                     <div class="absolute inset-0 bg-gradient-to-b from-surface-950/40 via-surface-950/10 to-surface-950/80"></div>
                                 </div>
                             {/if}
@@ -2113,12 +2394,13 @@
                             </div>
                         </div>
 
-                        <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
+                        <div class="border-t border-surface-800/50 bg-surface-950/95 p-3 sm:p-4">
                             <div class="flex flex-col gap-4">
                                 <ChatProviderControls
                                     providerState={providerSelectionState}
                                     modelState={modelSelectionState}
                                     sfuToolsEnabled={sfuToolsEnabled}
+                                    imageSupportEnabled={imageSupportEnabled}
                                     systemPrompt={systemPrompt}
                                     options={generationOptions}
                                     showPromptSettings={false}
@@ -2133,9 +2415,14 @@
                                 <ChatInput
                                     bind:value={input}
                                     {isSending}
+                                    attachments={pendingAttachments}
                                     isDisabled={isModelsLoading || !selectedModel}
                                     on:send={sendMessage}
+                                    on:cancel={cancelGeneration}
                                     on:openSettings={openPromptSettings}
+                                    on:attachmentsAdd={handleAttachmentsAdd}
+                                    on:attachmentRemove={handleAttachmentRemove}
+                                    on:attachmentError={handleAttachmentError}
                                 />
                                 {#if error}
                                     <p
@@ -2197,21 +2484,23 @@
                 ></button>
                 <div class="relative z-10 mt-auto pb-6">
                     <div class="relative mx-auto max-h-[80vh] w-full max-w-lg overflow-hidden">
-                        <div class="max-h-[80vh] min-h-[360px] overflow-y-auto rounded-3xl">
-                            <ModelPreviewPanel
-                                state={modelPreviewState}
-                                bind:expressionOptions
-                                bind:selectedExpression
-                                autoGenerateAudio={autoGenerateAudio}
-                                on:autoGenerateAudioChange={({ detail }) => updateAutoGenerateAudio(detail)}
-                                on:prev={prevModel}
-                                on:next={nextModel}
-                                on:confirm={({ detail }) => {
-                                    selectModel(detail ?? previewIndex);
-                                    closePreviewDrawer();
-                                }}
-                            />
-                            <div class="mt-4 flex flex-col gap-2">
+                        <div class="flex max-h-[80vh] min-h-[360px] flex-col overflow-y-auto rounded-3xl">
+                            <div class="flex-1 min-h-0">
+                                <ModelPreviewPanel
+                                    state={modelPreviewState}
+                                    bind:expressionOptions
+                                    bind:selectedExpression
+                                    autoGenerateAudio={autoGenerateAudio}
+                                    on:autoGenerateAudioChange={({ detail }) => updateAutoGenerateAudio(detail)}
+                                    on:prev={prevModel}
+                                    on:next={nextModel}
+                                    on:confirm={({ detail }) => {
+                                        selectModel(detail ?? previewIndex);
+                                        closePreviewDrawer();
+                                    }}
+                                />
+                            </div>
+                            <div class="mt-4 flex flex-shrink-0 flex-col gap-2 px-5 pb-2">
                                 <button
                                     type="button"
                                     class="btn btn-base border border-primary-500/50 bg-primary-500/15 text-sm font-semibold text-[color:var(--color-primary-contrast-500)] shadow-lg shadow-primary-500/20 transition hover:bg-primary-500/25"

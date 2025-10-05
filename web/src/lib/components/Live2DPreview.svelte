@@ -259,6 +259,8 @@ export let loading = false;
 
 	let idleAutoplayDelayMs: number = DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
 	let idleTimer: number | null = null;
+	let layoutRetryHandle: number | null = null;
+	let layoutRetryCancel: ((id: number) => void) | null = null;
 
 	const unsubscribeMouth = browser
 		? mouthOpen.subscribe((value) => {
@@ -378,6 +380,16 @@ export let loading = false;
 	let updateLayoutFn: (() => void) | null = null;
 	let contextLost = false;
 
+	const cancelLayoutRetry = () => {
+		if (layoutRetryHandle != null) {
+			if (browser && layoutRetryCancel) {
+				layoutRetryCancel(layoutRetryHandle);
+			}
+			layoutRetryHandle = null;
+			layoutRetryCancel = null;
+		}
+	};
+
 	const disposeModel = () => {
 		if (!model) return;
 
@@ -395,6 +407,7 @@ export let loading = false;
 		mouthFormAvailable = false;
 		mouthParamErrorLogged = false;
 		mouthFormErrorLogged = false;
+		cancelLayoutRetry();
 	};
 
 	const tick = () => {
@@ -490,10 +503,44 @@ export let loading = false;
 		mouthFormErrorLogged = false;
 	};
 
+	const scheduleLayoutRetry = () => {
+		if (!browser) return;
+		if (layoutRetryHandle != null) return;
+		if (typeof requestAnimationFrame === 'function') {
+			layoutRetryCancel = cancelAnimationFrame;
+			layoutRetryHandle = requestAnimationFrame(() => {
+				layoutRetryHandle = null;
+				layoutRetryCancel = null;
+				applyLayout();
+			});
+			return;
+		}
+
+		layoutRetryCancel = window.clearTimeout;
+		layoutRetryHandle = window.setTimeout(() => {
+			layoutRetryHandle = null;
+			layoutRetryCancel = null;
+			applyLayout();
+		}, 16);
+	};
+
 	const applyLayout = () => {
 		if (!container || !model) return;
 
 		const { clientWidth, clientHeight } = container;
+		if (clientWidth <= 0 || clientHeight <= 0) {
+			if (browser) {
+				const style = getComputedStyle(container);
+				if (style.display === 'none' || style.visibility === 'hidden') {
+					cancelLayoutRetry();
+					return;
+				}
+			}
+			scheduleLayoutRetry();
+			return;
+		}
+		cancelLayoutRetry();
+
 		const rawHeight = (() => {
 			const currentScaleY = model.scale?.y ?? 1;
 			const estimated = model.height || model.getBounds().height || 1;
@@ -597,6 +644,7 @@ export let loading = false;
 			currentTicker.add(tick);
 
 			contextLost = false;
+			scheduleLayoutRetry();
 		} catch (error) {
 			console.error('Live2DPreview: failed to initialize PIXI application', error);
 		} finally {
@@ -687,6 +735,7 @@ export let loading = false;
 			model.anchor.set(clamp(anchorX, 0, 1), clamp(anchorY, 0, 1));
 			model.update(0);
 			applyLayout();
+			scheduleLayoutRetry();
 			refreshMouthParameterSupport();
 
             expressions = await exprNames(model, modelUrl);
