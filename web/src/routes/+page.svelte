@@ -1,6 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte";
-    import { writable } from 'svelte/store';
+    import { onMount } from 'svelte';
     import { resolve } from '$app/paths';
     import {
         fetchProviders,
@@ -23,6 +22,13 @@
     import ChatInput from '$lib/components/chat/ChatInput.svelte';
     import ModelPreviewPanel, { type ModelPreviewState } from '$lib/components/chat/ModelPreviewPanel.svelte';
     import type { ModelOption } from '$lib/chat/types';
+    import Live2DModelManager from '$lib/components/live2d/Live2DModelManager.svelte';
+    import { listLive2DModels } from '$lib/live2d/client';
+    import {
+        defaultGenerationOptions,
+        normalizeGenerationOptions,
+        type LLMGenerationOptions
+    } from '$lib/llm/settings';
 
     interface Message extends ChatMessagePayload {
         id: string;
@@ -69,46 +75,40 @@
         return { text: visible, thinking: partialThinking || null, hasThinking: true };
     };
 
-    const demoModels: ModelOption[] = [
-        {
-            label: 'Hiyori',
-            modelPath: '/models/hiyori/runtime/hiyori_pro_t11.model3.json',
-            scaleMultiplier: 1,
-            anchor: { x: 0.5, y: 0.4 },
-            position: { x: 0.5, y: 0.4 }
-        },
-        {
-            label: 'Miku',
-            modelPath: '/models/miku/runtime/miku_sample_t04.model3.json',
-            scaleMultiplier: 0.85,
-            anchor: { x: 0.5, y: 0.2 },
-            position: { x: 0.5, y: 0.3 }
-        },
-        {
-			label: 'HuoHuo',
-			modelPath: '/models/huohuo/huohuo.model3.json',
-			scaleMultiplier: 1,
-			anchor: { x: 0.5, y: 0.4 },
-			position: { x: 0.5, y: 0.4 }
-		}
-	];
+    let live2dModels: ModelOption[] = [];
+    let live2dModelsLoading = false;
+    let live2dModelsError: string | null = null;
+    let previewIndex = 0;
+    let activeModelIndex = 0;
+    let activeModelId: string | null = null;
+    let modelPreviewState: ModelPreviewState = { models: [], index: 0, current: null };
 
-    let previewIndex = 2; // start on HuoHuo (same as active index)
-    let modelPreviewState: ModelPreviewState = {
-        models: demoModels,
-        index: previewIndex,
-        current: demoModels[previewIndex] ?? demoModels[0]
+    const setActiveIndex = (index: number) => {
+        if (!live2dModels.length) {
+            activeModelIndex = 0;
+            activeModelId = null;
+            return;
+        }
+
+        const count = live2dModels.length;
+        const normalized = ((index % count) + count) % count;
+        activeModelIndex = normalized;
+        activeModelId = live2dModels[normalized]?.id ?? null;
     };
 
     function nextModel() {
-        previewIndex = (previewIndex + 1) % demoModels.length;
+        if (!live2dModels.length) return;
+        const count = live2dModels.length;
+        previewIndex = (previewIndex + 1) % count;
     }
 
     function prevModel() {
-        previewIndex = (previewIndex - 1 + demoModels.length) % demoModels.length;
+        if (!live2dModels.length) return;
+        const count = live2dModels.length;
+        previewIndex = (previewIndex - 1 + count) % count;
     }
 
-    const activeModelIndex = writable<number>(previewIndex);
+    const FALLBACK_LIVE2D_MODEL_IDS = ['builtin-huohuo', 'builtin-hiyori', 'builtin-miku'];
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
     let providersError: string | null = null;
@@ -122,6 +122,7 @@
     let availableModels: string[] = [];
     let isModelsLoading = false;
     let currentModelError: string | null = null;
+    let currentModel: ModelOption | null = null;
     let providerSelectionState: ProviderSelectionState = {
         options: providers,
         loading: providersLoading,
@@ -148,6 +149,7 @@
 
     let isPreviewDrawerOpen = false;
     let previewDrawerEl: HTMLDivElement | null = null;
+    let isModelManagerOpen = false;
 
     const openPreviewDrawer = () => {
         isPreviewDrawerOpen = true;
@@ -164,6 +166,44 @@
         }
     };
 
+    const openModelManager = () => {
+        isModelManagerOpen = true;
+    };
+
+    const handleModelManagerClose = () => {
+        isModelManagerOpen = false;
+    };
+
+    const handleModelManagerSelect = (event: CustomEvent<string>) => {
+        const id = event.detail;
+        const index = live2dModels.findIndex((model) => model.id === id);
+        if (index !== -1) {
+            selectModel(index);
+        }
+    };
+
+    const handleModelManagerCreated = async (event: CustomEvent<ModelOption>) => {
+        const model = event.detail;
+        activeModelId = model.id;
+        await loadLive2DModels();
+    };
+
+    const handleModelManagerUpdated = async (event: CustomEvent<ModelOption>) => {
+        const model = event.detail;
+        if (activeModelId === model.id) {
+            activeModelId = model.id;
+        }
+        await loadLive2DModels();
+    };
+
+    const handleModelManagerDeleted = async (event: CustomEvent<string>) => {
+        const id = event.detail;
+        if (activeModelId === id) {
+            activeModelId = null;
+        }
+        await loadLive2DModels();
+    };
+
     const createInitialBotMessage = (): Message => ({
         id: createMessageId(),
         sender: 'bot',
@@ -175,6 +215,8 @@
 
     let messages: Message[] = [createInitialBotMessage()];
     let input = "";
+    let systemPrompt = '';
+    let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
 
     let expressionOptions: string[] = [];
     let selectedExpression = '';
@@ -214,19 +256,25 @@
                     providerExists && typeof serverSettings.model === 'string'
                         ? serverSettings.model
                         : '';
+                generationOptions = normalizeGenerationOptions(serverSettings.options);
+            } else {
+                generationOptions = { ...defaultGenerationOptions };
             }
         } catch (err) {
             settingsLoadError =
                 err instanceof Error ? err.message : 'Unable to load provider settings';
             selectedProviderId = providers[0]?.id ?? defaultProvider.id;
             selectedModel = '';
+            generationOptions = { ...defaultGenerationOptions };
         }
     };
 
     const selectModel = (index: number) => {
-        const option = demoModels[index];
-        if (!option) return;
-        activeModelIndex.set(index);
+        if (!live2dModels.length) return;
+        const count = live2dModels.length;
+        const normalized = ((index % count) + count) % count;
+        setActiveIndex(normalized);
+        previewIndex = normalized;
     };
 
     const toggleSidebar = () => {
@@ -259,14 +307,70 @@
         }
     };
 
-    const persistSettings = async (provider: ProviderId, model: string) => {
+    const loadLive2DModels = async () => {
+        live2dModelsLoading = true;
+        live2dModelsError = null;
+
+        try {
+            const models = await listLive2DModels();
+            live2dModels = models;
+
+            if (!models.length) {
+                setActiveIndex(0);
+                previewIndex = 0;
+                return;
+            }
+
+            let nextIndex = -1;
+
+            if (activeModelId) {
+                nextIndex = models.findIndex((model) => model.id === activeModelId);
+            }
+
+            if (nextIndex === -1) {
+                for (const candidate of FALLBACK_LIVE2D_MODEL_IDS) {
+                    const candidateIndex = models.findIndex((model) => model.id === candidate);
+                    if (candidateIndex !== -1) {
+                        nextIndex = candidateIndex;
+                        break;
+                    }
+                }
+            }
+
+            if (nextIndex === -1) {
+                nextIndex = 0;
+            }
+
+            setActiveIndex(nextIndex);
+            previewIndex = nextIndex;
+        } catch (err) {
+            live2dModels = [];
+            activeModelIndex = 0;
+            activeModelId = null;
+            previewIndex = 0;
+            live2dModelsError = err instanceof Error ? err.message : 'Unable to load Live2D models';
+        } finally {
+            live2dModelsLoading = false;
+        }
+    };
+
+    const serializeOptions = (options: LLMGenerationOptions) =>
+        JSON.stringify({
+            temperature: options.temperature ?? null,
+            topP: options.topP ?? null,
+            topK: options.topK ?? null,
+            maxInputTokens: options.maxInputTokens ?? null,
+            maxOutputTokens: options.maxOutputTokens ?? null
+        });
+
+    const persistSettings = async (provider: ProviderId, model: string, options: LLMGenerationOptions) => {
         if (!model) return;
 
         isPersistingSettings = true;
         settingsPersistError = null;
 
         try {
-            await saveProviderSettings(provider, model);
+            await saveProviderSettings(provider, model, options);
         } catch (err) {
             settingsPersistError =
                 err instanceof Error ? err.message : 'Unable to save provider settings';
@@ -279,6 +383,7 @@
         selectedModel = '';
         settingsPersistError = null;
         latestPersistSignature = '';
+        generationOptions = { ...defaultGenerationOptions };
         await ensureModels(provider);
     };
 
@@ -301,8 +406,8 @@
 
         const nextMessages: Message[] = [...messages, userMessage];
         const payload: ChatMessagePayload[] = nextMessages.map(({ sender, raw, text }) => ({
-            sender,
-            text: raw ?? text
+            sender: sender === 'user' ? 'user' : 'bot',
+            text: String(raw ?? text ?? '')
         }));
 
         messages = nextMessages;
@@ -329,7 +434,7 @@
                 );
             };
 
-            await streamChatMessage(selectedProviderId, selectedModel, payload, (event: ChatStreamEvent) => {
+            await streamChatMessage(selectedProviderId, selectedModel, systemPrompt, payload, generationOptions, (event: ChatStreamEvent) => {
                 if (event.type === 'delta' && event.value) {
                     assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
                     const { text, thinking, hasThinking } = extractMessageParts(assistantMessage.raw ?? '');
@@ -383,16 +488,31 @@
             await loadProviders();
             await loadSettings();
             await ensureModels(selectedProviderId);
+            await loadLive2DModels();
             allowPersist = true;
             latestPersistSignature = '';
         })();
     });
 
-    $: currentModel = demoModels[$activeModelIndex] ?? demoModels[0];
+    $: if (!live2dModels.length) {
+        activeModelIndex = 0;
+        activeModelId = null;
+        previewIndex = 0;
+    }
+
+    $: if (live2dModels.length && activeModelIndex >= live2dModels.length) {
+        setActiveIndex(live2dModels.length - 1);
+    }
+
+    $: if (live2dModels.length && previewIndex >= live2dModels.length) {
+        previewIndex = activeModelIndex;
+    }
+
+    $: currentModel = live2dModels[activeModelIndex] ?? live2dModels[0] ?? null;
     $: modelPreviewState = {
-        models: demoModels,
-        index: previewIndex,
-        current: currentModel
+        models: live2dModels,
+        index: live2dModels.length ? previewIndex : 0,
+        current: live2dModels[previewIndex] ?? currentModel
     };
     $: currentProvider = providers.find((provider) => provider.id === selectedProviderId) ?? defaultProvider;
     $: computedProvidersError = providersError ?? (providers.length === 0 && !providersLoading
@@ -419,10 +539,12 @@
         selectedModel = availableModels[0];
     }
     $: if (allowPersist) {
-        const signature = selectedModel ? `${selectedProviderId}::${selectedModel}` : '';
+        const signature = selectedModel
+            ? `${selectedProviderId}::${selectedModel}::${serializeOptions(generationOptions)}`
+            : '';
         if (signature && signature !== latestPersistSignature) {
             latestPersistSignature = signature;
-            persistSettings(selectedProviderId, selectedModel);
+            persistSettings(selectedProviderId, selectedModel, generationOptions);
         }
     }
 
@@ -489,23 +611,27 @@
             on:newChat={startNewChat}
         />
 
-        <main class="relative z-10 flex-1 overflow-hidden">
-            <div class="flex h-full w-full flex-col gap-4 px-4 pb-8 pt-4 lg:px-8 lg:pb-12 2xl:px-12">
-                <div class="flex h-full flex-col gap-4 xl:flex-row xl:items-stretch xl:gap-8">
-                    <section class="relative flex h-full flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
+        <main class="relative z-10 flex-1 overflow-hidden min-h-0">
+            <div class="flex h-full w-full flex-col gap-4 px-4 pb-8 pt-4 min-h-0 lg:px-8 lg:pb-12 2xl:px-12">
+                <div class="flex h-full flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch xl:gap-8">
+                    <section class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
                         <ChatMessages {messages} />
 
                         <div class="border-t border-surface-800/50 bg-surface-950/95 p-4">
                             <div class="flex flex-col gap-4">
-                                <ChatProviderControls
-                                    providerState={providerSelectionState}
-                                    modelState={modelSelectionState}
-                                    on:providerChange={({ detail }) => {
-                                        selectedProviderId = detail;
-                                        void handleProviderChange(detail);
-                                    }}
-                                    on:modelChange={({ detail }) => (selectedModel = detail)}
-                                />
+                        <ChatProviderControls
+                            providerState={providerSelectionState}
+                            modelState={modelSelectionState}
+                            systemPrompt={systemPrompt}
+                            options={generationOptions}
+                            on:providerChange={({ detail }) => {
+                                selectedProviderId = detail;
+                                void handleProviderChange(detail);
+                            }}
+                            on:modelChange={({ detail }) => (selectedModel = detail)}
+                            on:systemPromptChange={({ detail }) => (systemPrompt = detail)}
+                            on:optionsChange={({ detail }) => (generationOptions = detail)}
+                        />
                                 <div class="flex flex-col gap-2 sm:flex-row xl:hidden">
                                     <button
                                         type="button"
@@ -549,6 +675,20 @@
                             on:next={nextModel}
                             on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
                         />
+                        <div class="mt-4 flex flex-col gap-2">
+                            <button
+                                type="button"
+                                class="btn btn-base border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                on:click={openModelManager}
+                            >
+                                Manage Models
+                            </button>
+                            {#if live2dModelsError}
+                                <p class="rounded-2xl border border-error-500/40 bg-error-500/15 px-4 py-3 text-xs text-error-100">
+                                    {live2dModelsError}
+                                </p>
+                            {/if}
+                        </div>
                     </aside>
                 </div>
             </div>
@@ -583,6 +723,23 @@
                                     closePreviewDrawer();
                                 }}
                             />
+                            <div class="mt-4 flex flex-col gap-2">
+                                <button
+                                    type="button"
+                                    class="btn btn-base border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                    on:click={() => {
+                                        closePreviewDrawer();
+                                        openModelManager();
+                                    }}
+                                >
+                                    Manage Models
+                                </button>
+                                {#if live2dModelsError}
+                                    <p class="rounded-2xl border border-error-500/40 bg-error-500/15 px-4 py-3 text-xs text-error-100">
+                                        {live2dModelsError}
+                                    </p>
+                                {/if}
+                            </div>
                         </div>
                         <button
                             type="button"
@@ -598,3 +755,16 @@
         {/if}
     </div>
 </div>
+
+<Live2DModelManager
+    open={isModelManagerOpen}
+    models={live2dModels}
+    loading={live2dModelsLoading}
+    error={live2dModelsError}
+    activeModelId={activeModelId}
+    on:close={handleModelManagerClose}
+    on:select={handleModelManagerSelect}
+    on:created={handleModelManagerCreated}
+    on:updated={handleModelManagerUpdated}
+    on:deleted={handleModelManagerDeleted}
+/>

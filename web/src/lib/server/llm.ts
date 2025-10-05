@@ -1,8 +1,9 @@
 import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
+import type { LLMGenerationOptions } from '$lib/llm/settings';
 
 export interface ProviderMessage {
-  role: 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
@@ -37,6 +38,28 @@ const buildOllamaBaseUrl = (provider: ProviderConfig): string => {
   return normalizeUrl(baseUrl, port);
 };
 
+const buildOllamaOptions = (options: LLMGenerationOptions): Record<string, number> => {
+  const payload: Record<string, number> = {};
+
+  if (typeof options.temperature === 'number') {
+    payload.temperature = options.temperature;
+  }
+  if (typeof options.topP === 'number') {
+    payload.top_p = options.topP;
+  }
+  if (typeof options.topK === 'number') {
+    payload.top_k = options.topK;
+  }
+  if (typeof options.maxInputTokens === 'number') {
+    payload.num_ctx = options.maxInputTokens;
+  }
+  if (typeof options.maxOutputTokens === 'number') {
+    payload.num_predict = options.maxOutputTokens;
+  }
+
+  return payload;
+};
+
 const resolveGeminiApiKey = (provider: ProviderConfig): string => {
   const key = provider.settings.apiKey?.trim() || env.GEMINI_API_KEY;
   if (!key) {
@@ -62,13 +85,15 @@ const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =
 export const streamProviderChat = async (
   provider: ProviderConfig,
   model: string,
-  history: ProviderMessage[]
+  history: ProviderMessage[],
+  systemPrompt: string | undefined,
+  options: LLMGenerationOptions
 ): Promise<ReadableStream<Uint8Array>> => {
   switch (provider.kind) {
     case 'ollama':
-      return streamOllamaChat(provider, model, history);
+      return streamOllamaChat(provider, model, history, options);
     case 'gemini':
-      return streamGeminiChat(provider, model, history);
+      return streamGeminiChat(provider, model, history, systemPrompt, options);
     default:
       throw new Error(`Unsupported provider: ${provider.kind}`);
   }
@@ -95,19 +120,27 @@ const listOllamaModels = async (provider: ProviderConfig): Promise<string[]> => 
 const streamOllamaChat = async (
   provider: ProviderConfig,
   model: string,
-  history: ProviderMessage[]
+  history: ProviderMessage[],
+  options: LLMGenerationOptions
 ): Promise<ReadableStream<Uint8Array>> => {
   const baseUrl = buildOllamaBaseUrl(provider);
+  const ollamaOptions = buildOllamaOptions(options);
+  const requestBody: Record<string, unknown> = {
+    model,
+    messages: history,
+    stream: true
+  };
+
+  if (Object.keys(ollamaOptions).length > 0) {
+    requestBody.options = ollamaOptions;
+  }
+
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model,
-      messages: history,
-      stream: true
-    })
+    body: JSON.stringify(requestBody)
   });
 
   if (!response.ok) {
@@ -287,22 +320,64 @@ const listGeminiModels = async (provider: ProviderConfig): Promise<string[]> => 
 const chatWithGemini = async (
   provider: ProviderConfig,
   model: string,
-  history: ProviderMessage[]
+  history: ProviderMessage[],
+  systemPrompt: string | undefined,
+  options: LLMGenerationOptions
 ): Promise<string> => {
   const apiKey = resolveGeminiApiKey(provider);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const contents = history.map((entry) => ({
+  const dialogue = history.filter((entry) => entry.role !== 'system');
+  const systemMessages = history
+    .filter((entry) => entry.role === 'system')
+    .map((entry) => entry.content?.trim())
+    .filter((value): value is string => Boolean(value && value.length));
+
+  if (systemPrompt && systemPrompt.trim()) {
+    const trimmed = systemPrompt.trim();
+    if (!systemMessages.some((message) => message === trimmed)) {
+      systemMessages.push(trimmed);
+    }
+  }
+
+  const contents = dialogue.map((entry) => ({
     role: entry.role === 'user' ? 'user' : 'model',
     parts: [{ text: entry.content }]
   }));
+
+  const body: Record<string, unknown> = { contents };
+
+  const generationConfig: Record<string, number> = {};
+  if (typeof options.temperature === 'number') {
+    generationConfig.temperature = options.temperature;
+  }
+  if (typeof options.topP === 'number') {
+    generationConfig.topP = options.topP;
+  }
+  if (typeof options.topK === 'number') {
+    generationConfig.topK = options.topK;
+  }
+  if (typeof options.maxOutputTokens === 'number') {
+    generationConfig.maxOutputTokens = options.maxOutputTokens;
+  }
+
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig;
+  }
+
+  if (systemMessages.length) {
+    body.systemInstruction = {
+      role: 'system',
+      parts: systemMessages.map((text) => ({ text }))
+    };
+  }
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ contents })
+    body: JSON.stringify(body)
   });
 
   const data = await response.json();
@@ -326,9 +401,11 @@ const chatWithGemini = async (
 const streamGeminiChat = async (
   provider: ProviderConfig,
   model: string,
-  history: ProviderMessage[]
+  history: ProviderMessage[],
+  systemPrompt: string | undefined,
+  options: LLMGenerationOptions
 ): Promise<ReadableStream<Uint8Array>> => {
-  const reply = await chatWithGemini(provider, model, history);
+  const reply = await chatWithGemini(provider, model, history, systemPrompt, options);
 
   return new ReadableStream<Uint8Array>({
     start(controller) {

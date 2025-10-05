@@ -29,7 +29,7 @@
   };
 </script>
 
-<div class="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
+<div class="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4">
 	{#each messages as msg, index (msg.id ?? index)}
         <div
             class={

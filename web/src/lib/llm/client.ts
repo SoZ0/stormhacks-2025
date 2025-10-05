@@ -1,5 +1,10 @@
 import { defaultProvider } from '$lib/llm/providers';
 import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
+import {
+  defaultGenerationOptions,
+  normalizeGenerationOptions,
+  type LLMGenerationOptions
+} from '$lib/llm/settings';
 
 export type LlmSender = 'user' | 'bot';
 
@@ -19,6 +24,7 @@ export interface ChatStreamEvent {
 export interface ProviderSettingsPayload {
   provider?: ProviderId;
   model?: string;
+  options?: LLMGenerationOptions;
 }
 
 interface ProvidersResponse {
@@ -70,7 +76,20 @@ export const fetchProviderSettings = async (): Promise<ProviderSettingsPayload |
     await jsonOrNull<ProviderSettingsResponse>(response),
     'Unable to load settings'
   );
-  return data.settings ?? null;
+  const settings = data.settings ?? null;
+  if (!settings || typeof settings !== 'object') {
+    return null;
+  }
+
+  const provider = typeof settings.provider === 'string' ? settings.provider : undefined;
+  const model = typeof settings.model === 'string' ? settings.model : undefined;
+  const options = normalizeGenerationOptions((settings as { options?: unknown }).options);
+
+  return {
+    provider,
+    model,
+    options
+  };
 };
 
 export const fetchModels = async (provider: ProviderId): Promise<string[]> => {
@@ -82,11 +101,15 @@ export const fetchModels = async (provider: ProviderId): Promise<string[]> => {
     .map((model) => model.trim());
 };
 
-export const saveProviderSettings = async (provider: ProviderId, model: string) => {
+export const saveProviderSettings = async (
+  provider: ProviderId,
+  model: string,
+  options: LLMGenerationOptions = defaultGenerationOptions
+) => {
   const response = await fetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model })
+    body: JSON.stringify({ provider, model, options })
   });
 
   ensureOk(response, await jsonOrNull<ProviderSettingsResponse>(response), 'Unable to save settings');
@@ -110,13 +133,15 @@ const parseStreamLine = (line: string): ChatStreamEvent | null => {
 export const streamChatMessage = async (
   provider: ProviderId,
   model: string,
+  systemPrompt: string,
   messages: ChatMessagePayload[],
+  options: LLMGenerationOptions,
   onEvent: (event: ChatStreamEvent) => void
 ): Promise<void> => {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model, messages })
+    body: JSON.stringify({ provider, model, systemPrompt, messages, options })
   });
 
   if (!response.ok) {
