@@ -5,12 +5,17 @@ import type {
   Live2DModelUpdateInput
 } from './types';
 import {
+  applyModelOverride,
   buildLocalModelBundle,
   createLocalModel,
   deleteLocalModel,
+  deleteModelOverride,
   getLocalModel,
+  getModelOverride,
   hasBrowserStorage,
   listLocalModels,
+  listModelOverrides,
+  saveModelOverride,
   updateLocalModel
 } from './local-store';
 
@@ -37,11 +42,13 @@ const ensureOk = <T extends { error?: string }>(
 const normalizeRemoteModel = (model: Live2DModelDefinition): Live2DModelDefinition => ({
   ...model,
   storage: model.storage ?? (model.isCustom ? 'remote' : 'builtin'),
-  editable: model.editable && model.storage !== 'builtin'
+  editable: model.storage === 'builtin' ? true : model.editable,
+  removable: model.storage === 'builtin' ? false : model.removable
 });
 
 export const listLive2DModels = async (): Promise<Live2DModelDefinition[]> => {
   const local = hasBrowserStorage() ? await listLocalModels() : [];
+  const overrides = hasBrowserStorage() ? await listModelOverrides() : new Map();
 
   try {
     const response = await fetch('/api/live2d/models', { method: 'GET' });
@@ -50,11 +57,20 @@ export const listLive2DModels = async (): Promise<Live2DModelDefinition[]> => {
       await jsonOrNull<Live2DModelListResponse>(response),
       'Unable to load Live2D models'
     );
-    const remote = Array.isArray(data.models) ? data.models.map(normalizeRemoteModel) : [];
+    const remote = Array.isArray(data.models)
+      ? data.models.map((item) => {
+          const normalized = normalizeRemoteModel(item);
+          const override = overrides.get(normalized.id);
+          return applyModelOverride(normalized, override);
+        })
+      : [];
     return [...local, ...remote];
   } catch (error) {
     console.warn('Failed to load server models, falling back to local only.', error);
-    return [...local];
+    const fallback = hasBrowserStorage()
+      ? local.map((item) => applyModelOverride(item, overrides.get(item.id)))
+      : local;
+    return [...fallback];
   }
 };
 
@@ -75,13 +91,18 @@ export const uploadLive2DModel = async (
 
 export const updateLive2DModel = async (
   id: string,
-  payload: Live2DModelUpdateInput
+  payload: Live2DModelUpdateInput,
+  currentModel?: Live2DModelDefinition
 ): Promise<Live2DModelDefinition> => {
   if (hasBrowserStorage()) {
     const existing = await getLocalModel(id);
     if (existing) {
       return updateLocalModel(id, payload);
     }
+  }
+
+  if (currentModel?.storage === 'builtin' && hasBrowserStorage()) {
+    return saveModelOverride(currentModel, payload);
   }
 
   const response = await fetch(`/api/live2d/models/${id}`, {
@@ -108,6 +129,7 @@ export const deleteLive2DModel = async (id: string): Promise<void> => {
     const existing = await getLocalModel(id);
     if (existing) {
       await deleteLocalModel(id);
+      await deleteModelOverride(id);
       return;
     }
   }
@@ -157,7 +179,12 @@ export const getLive2DModel = async (id: string): Promise<Live2DModelDefinition>
   if (!data.model) {
     throw new Error('Model not found');
   }
-  return normalizeRemoteModel(data.model);
+  const normalized = normalizeRemoteModel(data.model);
+  if (hasBrowserStorage()) {
+    const override = await getModelOverride(id);
+    return applyModelOverride(normalized, override);
+  }
+  return normalized;
 };
 
 export const getLocalModelBundle = buildLocalModelBundle;

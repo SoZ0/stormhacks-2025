@@ -7,7 +7,9 @@ import {
   DEFAULT_SCALE_MULTIPLIER,
   DEFAULT_TARGET_HEIGHT_RATIO,
   type Live2DModelConfig,
-  type Live2DModelDefinition
+  type Live2DModelDefinition,
+  type Live2DModelUpdateInput,
+  type Live2DVectorConfig
 } from './types';
 
 interface StoredCustomModel {
@@ -43,8 +45,9 @@ interface UpdateLocalModelInput extends Live2DModelConfig {
 }
 
 const DB_NAME = 'live2d-custom-models';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'models';
+const OVERRIDE_STORE = 'overrides';
 
 const isBrowser = typeof window !== 'undefined';
 
@@ -90,15 +93,31 @@ const defaultSettings = (): Live2DModelConfig => ({
   voiceId: null
 });
 
+interface StoredModelOverride {
+  id: string;
+  label?: string;
+  modelPath?: string;
+  cubismCorePath?: string;
+  anchor?: Live2DVectorConfig;
+  position?: Live2DVectorConfig;
+  scaleMultiplier?: number;
+  targetHeightRatio?: number;
+  voiceId?: string | null;
+  updatedAt: number;
+}
+
 const ensureDb = async (): Promise<IDBPDatabase> => {
   if (!isBrowser) {
     throw new Error('Custom Live2D models require a browser environment.');
   }
 
   return openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1 && !db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+      if (oldVersion < 2 && !db.objectStoreNames.contains(OVERRIDE_STORE)) {
+        db.createObjectStore(OVERRIDE_STORE, { keyPath: 'id' });
       }
     }
   });
@@ -277,6 +296,107 @@ export const deleteLocalModel = async (id: string): Promise<void> => {
 export const getLocalModel = async (id: string): Promise<StoredCustomModel | undefined> => {
   const db = await ensureDb();
   return (await db.get(STORE_NAME, id)) as StoredCustomModel | undefined;
+};
+
+export const listModelOverrides = async (): Promise<Map<string, StoredModelOverride>> => {
+  const db = await ensureDb();
+  const records = (await db.getAll(OVERRIDE_STORE)) as StoredModelOverride[];
+  const map = new Map<string, StoredModelOverride>();
+  for (const record of records) {
+    map.set(record.id, record);
+  }
+  return map;
+};
+
+export const getModelOverride = async (id: string): Promise<StoredModelOverride | undefined> => {
+  const db = await ensureDb();
+  return (await db.get(OVERRIDE_STORE, id)) as StoredModelOverride | undefined;
+};
+
+const mergeVector = (base: Live2DVectorConfig | undefined, override: Live2DVectorConfig | undefined) => {
+  return {
+    x: typeof override?.x === 'number' ? override.x : base?.x,
+    y: typeof override?.y === 'number' ? override.y : base?.y
+  } satisfies Live2DVectorConfig;
+};
+
+export const applyModelOverride = (
+  model: Live2DModelDefinition,
+  override: StoredModelOverride | undefined
+): Live2DModelDefinition => {
+  if (!override) return model;
+
+  return {
+    ...model,
+    label: override.label ?? model.label,
+    modelPath: override.modelPath ?? model.modelPath,
+    cubismCorePath: override.cubismCorePath ?? model.cubismCorePath,
+    anchor: mergeVector(model.anchor, override.anchor),
+    position: mergeVector(model.position, override.position),
+    scaleMultiplier: override.scaleMultiplier ?? model.scaleMultiplier,
+    targetHeightRatio: override.targetHeightRatio ?? model.targetHeightRatio,
+    voiceId:
+      override.voiceId === undefined
+        ? model.voiceId ?? null
+        : override.voiceId,
+    updatedAt: Math.max(model.updatedAt, override.updatedAt ?? model.updatedAt)
+  };
+};
+
+const extractOverrideFromModel = (model: Live2DModelDefinition): StoredModelOverride => ({
+  id: model.id,
+  label: model.label,
+  modelPath: model.modelPath,
+  cubismCorePath: model.cubismCorePath,
+  anchor: model.anchor,
+  position: model.position,
+  scaleMultiplier: model.scaleMultiplier,
+  targetHeightRatio: model.targetHeightRatio,
+  voiceId: model.voiceId ?? null,
+  updatedAt: model.updatedAt
+});
+
+const mergeModelAndUpdate = (
+  base: Live2DModelDefinition,
+  payload: Live2DModelUpdateInput
+): Live2DModelDefinition => ({
+  ...base,
+  label: payload.label?.trim() ? payload.label.trim() : base.label,
+  modelPath: payload.modelPath?.trim() ? payload.modelPath.trim() : base.modelPath,
+  cubismCorePath: payload.cubismCorePath?.trim()
+    ? payload.cubismCorePath.trim()
+    : base.cubismCorePath,
+  anchor: mergeVector(base.anchor, payload.anchor),
+  position: mergeVector(base.position, payload.position),
+  scaleMultiplier:
+    typeof payload.scaleMultiplier === 'number' && Number.isFinite(payload.scaleMultiplier)
+      ? payload.scaleMultiplier
+      : base.scaleMultiplier,
+  targetHeightRatio:
+    typeof payload.targetHeightRatio === 'number' && Number.isFinite(payload.targetHeightRatio)
+      ? payload.targetHeightRatio
+      : base.targetHeightRatio,
+  voiceId:
+    payload.voiceId === undefined
+      ? base.voiceId ?? null
+      : (payload.voiceId === null ? null : payload.voiceId),
+  updatedAt: Date.now()
+});
+
+export const saveModelOverride = async (
+  base: Live2DModelDefinition,
+  payload: Live2DModelUpdateInput
+): Promise<Live2DModelDefinition> => {
+  const next = mergeModelAndUpdate(base, payload);
+  const record = extractOverrideFromModel(next);
+  const db = await ensureDb();
+  await db.put(OVERRIDE_STORE, record);
+  return next;
+};
+
+export const deleteModelOverride = async (id: string): Promise<void> => {
+  const db = await ensureDb();
+  await db.delete(OVERRIDE_STORE, id);
 };
 
 const guessMimeType = (path: string) => {

@@ -369,7 +369,7 @@
     editError = null;
 
     try {
-      const updated = await updateLive2DModel(editingModel.id, payload);
+      const updated = await updateLive2DModel(editingModel.id, payload, editingModel);
       displayModels = displayModels.map((item) => (item.id === updated.id ? updated : item));
       dispatch('updated', updated);
       startEditing(updated);

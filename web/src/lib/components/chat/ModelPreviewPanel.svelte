@@ -86,7 +86,7 @@
 		<p class="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">Model Preview</p>
 		<h2 class="text-lg font-semibold text-surface-50">{activeModel.label}</h2>
 	</header>
-	<div class="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-surface-800/40 bg-surface-950/40 min-h-[360px]">
+	<div class="relative flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-surface-800/40 bg-surface-950/40">
 		<Live2DPreview
 			config={previewConfig}
 			bind:loading={isPreviewLoading}

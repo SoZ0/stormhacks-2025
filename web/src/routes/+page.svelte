@@ -1124,7 +1124,7 @@
         <p class="text-sm text-surface-400">Harness your favourite models, orchestrate agents, and ship faster.</p>
     </AppBar>
 
-    <div class="relative flex flex-1 overflow-hidden">
+    <div class="relative flex flex-1 overflow-hidden p-4 gap-4">
         {#if !isCollapsed}
             <button
                 type="button"
@@ -1149,8 +1149,8 @@
         />
 
         <main class="relative z-10 flex-1 overflow-hidden min-h-0">
-            <div class="flex h-full w-full flex-col gap-4 px-4 pb-8 pt-4 min-h-0 lg:px-8 lg:pb-12 2xl:px-12">
-                <div class="flex h-full flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch xl:gap-8">
+            <div class="flex h-full w-full flex-col gap-4 min-h-0">
+                <div class="flex h-full flex-col gap-4 min-h-0 xl:flex-row xl:items-stretch">
                     <section class="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-surface-800/60 bg-surface-950/90 shadow-2xl shadow-surface-950/30 xl:flex-1">
                         <ChatMessages {messages} />
 
@@ -1205,8 +1205,8 @@
                         </div>
                     </section>
 
-                    <aside class="hidden min-h-[420px] xl:block xl:w-[420px] xl:flex-none 2xl:w-[480px]">
-                         <div class="mb-4 flex flex-col gap-2">
+                    <aside class="xl:block xl:w-[420px] 2xl:w-[480px] h-full min-h-0 flex flex-col">
+                        <div class="mb-4 flex shrink-0 flex-col gap-2">
                             <button
                                 type="button"
                                 class="btn btn-base border border-blue-800/60 bg-blue-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
@@ -1220,15 +1220,16 @@
                                 </p>
                             {/if}
                         </div>
-                        <ModelPreviewPanel
-                            state={modelPreviewState}
-                            bind:expressionOptions
-                            bind:selectedExpression
-                            on:prev={prevModel}
-                            on:next={nextModel}
-                            on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
-                        />
-                       
+                        <div class="flex-1 min-h-0 overflow-hidden">
+                            <ModelPreviewPanel
+                                state={modelPreviewState}
+                                bind:expressionOptions
+                                bind:selectedExpression
+                                on:prev={prevModel}
+                                on:next={nextModel}
+                                on:confirm={({ detail }) => selectModel(detail ?? previewIndex)}
+                            />
+                        </div>
                     </aside>
                 </div>
             </div>
@@ -1249,7 +1250,7 @@
                     on:click={closePreviewDrawer}
                     aria-label="Dismiss model preview"
                 ></button>
-                <div class="relative z-10 mt-auto w-full px-4 pb-6">
+                <div class="relative z-10 mt-auto pb-6">
                     <div class="relative mx-auto max-h-[80vh] w-full max-w-lg overflow-hidden">
                         <div class="max-h-[80vh] min-h-[360px] overflow-y-auto rounded-3xl">
                             <ModelPreviewPanel

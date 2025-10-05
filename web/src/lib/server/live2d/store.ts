@@ -78,7 +78,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
-    editable: false,
+    editable: true,
     removable: false,
     storage: 'builtin'
   },
@@ -96,7 +96,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
-    editable: false,
+    editable: true,
     removable: false,
     storage: 'builtin'
   },
@@ -114,7 +114,7 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     createdAt: 0,
     updatedAt: 0,
     isCustom: false,
-    editable: false,
+    editable: true,
     removable: false,
     storage: 'builtin'
   }
