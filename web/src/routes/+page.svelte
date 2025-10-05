@@ -4,6 +4,14 @@
     import { Live2DPreview } from '$lib';
     import { writable } from 'svelte/store';
     import { resolve } from '$app/paths';
+    import {
+        fetchProviders,
+        fetchProviderSettings,
+        fetchModels,
+        saveProviderSettings,
+        sendChatMessage,
+        type ChatMessagePayload
+    } from '$lib/llm/client';
     import { defaultProvider } from '$lib/llm/providers';
     import type { ProviderConfig, ProviderId } from '$lib/llm/providers';
 
@@ -17,10 +25,7 @@
         targetHeightRatio?: number;
     }
 
-    interface Message {
-        sender: 'user' | 'bot';
-        text: string;
-    }
+    type Message = ChatMessagePayload;
 
     const demoModels: ModelOption[] = [
         {
@@ -61,12 +66,6 @@
      }
         
 
-    // message structure
-    interface Message {
-        sender: "user" | "bot";
-        text: string;
-    }
-
     const activeModelIndex = writable<number>(0);
     let providers: ProviderConfig[] = [defaultProvider];
     let providersLoading = false;
@@ -103,16 +102,8 @@
         providersError = null;
 
         try {
-            const response = await fetch('/api/providers');
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load providers (${response.status})`);
-            }
-
-            const list = Array.isArray(data.providers) ? (data.providers as ProviderConfig[]) : [];
-
-            providers = list.length ? list : [defaultProvider];
+            const list = await fetchProviders();
+            providers = list;
 
             if (!providers.some((provider) => provider.id === selectedProviderId)) {
                 selectedProviderId = providers[0]?.id ?? defaultProvider.id;
@@ -130,19 +121,9 @@
         settingsLoadError = null;
 
         try {
-            const response = await fetch('/api/settings');
-            const data = await response.json().catch(() => null);
+            const serverSettings = await fetchProviderSettings();
 
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load settings (${response.status})`);
-            }
-
-            const serverSettings = data.settings;
-            if (
-                serverSettings &&
-                typeof serverSettings === 'object' &&
-                typeof serverSettings.provider === 'string'
-            ) {
+            if (serverSettings && typeof serverSettings.provider === 'string') {
                 const providerExists = providers.some((provider) => provider.id === serverSettings.provider);
                 selectedProviderId = providerExists
                     ? serverSettings.provider
@@ -183,20 +164,7 @@
         modelsError = { ...modelsError, [provider]: undefined };
 
         try {
-            const response = await fetch(`/api/models/${provider}`);
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to load models (${response.status})`);
-            }
-
-            const models = Array.isArray(data.models)
-                ? data.models.filter(
-                        (name: unknown): name is string =>
-                            typeof name === 'string' && name.trim().length > 0
-                    )
-                : [];
-
+            const models = await fetchModels(provider);
             modelsByProvider = { ...modelsByProvider, [provider]: models };
         } catch (err) {
             modelsError = {
@@ -216,17 +184,7 @@
         settingsPersistError = null;
 
         try {
-            const response = await fetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider, model })
-            });
-
-            const data = await response.json().catch(() => null);
-
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Unable to save settings (${response.status})`);
-            }
+            await saveProviderSettings(provider, model);
         } catch (err) {
             settingsPersistError =
                 err instanceof Error ? err.message : 'Unable to save provider settings';
@@ -251,7 +209,7 @@
         }
 
         const nextMessages: Message[] = [...messages, { sender: 'user', text: trimmed }];
-        const payload = nextMessages.map(({ sender, text }) => ({ sender, text }));
+        const payload: ChatMessagePayload[] = nextMessages.map(({ sender, text }) => ({ sender, text }));
 
         messages = nextMessages;
         input = "";
@@ -259,26 +217,7 @@
         isSending = true;
 
         try {
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    provider: selectedProviderId,
-                    model: selectedModel,
-                    messages: payload
-                })
-            });
-
-            const data = await response.json().catch(() => null);
-            if (!response.ok || !data) {
-                throw new Error(data?.error ?? `Request failed (${response.status})`);
-            }
-
-            const reply: string | undefined = data?.reply;
-            if (!reply) {
-                throw new Error('Response did not include a reply message');
-            }
-
+            const reply = await sendChatMessage(selectedProviderId, selectedModel, payload);
             messages = [...nextMessages, { sender: 'bot', text: reply }];
         } catch (err) {
             error = err instanceof Error ? err.message : 'An unexpected error occurred';
