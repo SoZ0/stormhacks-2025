@@ -1,4 +1,3 @@
-import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
 import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
@@ -82,8 +81,28 @@ const normalizeUrl = (baseUrl: string, port?: string): string => {
   return normalized;
 };
 
+const getRuntimeEnv = (key: string): string | undefined => {
+  if (typeof process !== 'undefined' && process?.env?.[key]) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+
+  if (typeof globalThis !== 'undefined') {
+    const tauriEnv = (globalThis as { __TAURI_PRIVATE_ENV__?: Record<string, string> })
+      .__TAURI_PRIVATE_ENV__;
+    const value = tauriEnv?.[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
 const buildOllamaBaseUrl = (provider: ProviderConfig): string => {
-  const fallback = env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+  const fallback = getRuntimeEnv('OLLAMA_BASE_URL') ?? 'http://localhost:11434';
   const baseUrl = provider.settings.baseUrl || fallback;
   const port = provider.settings.port;
 
@@ -129,7 +148,7 @@ const resolveOllamaThinkSetting = (
 };
 
 const resolveGeminiApiKey = (provider: ProviderConfig): string => {
-  const key = provider.settings.apiKey?.trim() || env.GEMINI_API_KEY;
+  const key = provider.settings.apiKey?.trim() || getRuntimeEnv('GEMINI_API_KEY');
   if (!key) {
     throw new Error('Gemini provider is missing an API key.');
   }
