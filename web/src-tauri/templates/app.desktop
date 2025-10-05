@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+Exec={{exec}}
+StartupWMClass={{exec}}
+Icon=stormhacks_desktop
+{{#if comment}}Comment={{comment}}
+{{/if}}Categories={{categories}}
+Terminal=false

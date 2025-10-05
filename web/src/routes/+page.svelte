@@ -2153,7 +2153,7 @@
                         <div class="mb-4 flex flex-col gap-2">
                             <button
                                 type="button"
-                                class="btn btn-base border border-blue-800/60 bg-blue-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                class="btn btn-base border border-primary-500/50 bg-primary-500/15 text-sm font-semibold text-[color:var(--color-primary-contrast-500)] shadow-lg shadow-primary-500/20 transition hover:bg-primary-500/25"
                                 on:click={openModelManager}
                             >
                                 Manage Models
@@ -2214,7 +2214,7 @@
                             <div class="mt-4 flex flex-col gap-2">
                                 <button
                                     type="button"
-                                    class="btn btn-base border border-surface-800/60 bg-surface-950/70 text-sm font-semibold text-surface-100 shadow-lg shadow-surface-950/20"
+                                    class="btn btn-base border border-primary-500/50 bg-primary-500/15 text-sm font-semibold text-[color:var(--color-primary-contrast-500)] shadow-lg shadow-primary-500/20 transition hover:bg-primary-500/25"
                                     on:click={() => {
                                         closePreviewDrawer();
                                         openModelManager();
