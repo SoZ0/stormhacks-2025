@@ -120,6 +120,6 @@ The binary will be located at `web/src-tauri/target/release/stormhacks_desktop` 
 - Delete `web/src-tauri/target` if you encounter stale bundle artefacts, then rebuild.
 - On Linux, export `WEBKIT_DISABLE_DMABUF_RENDERER=1` if WebKitGTK crashes while bundling.
 
-## Citations
+## Art <3
 - Baily Studio (Huohuo)https://bailyoxo.com/
 - Live 2D (Miku, Hiyori)https://www.live2d.com/en/learn/sample/
