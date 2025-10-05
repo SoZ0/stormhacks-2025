@@ -3,6 +3,7 @@ import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
 import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
 import { LIVE2D_TOOLS, executeLive2DTool } from '$lib/server/tools/live2d';
+import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
 
 export interface ProviderAttachment {
   id: string;
@@ -155,12 +156,12 @@ const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course 
 
 const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
   const alreadyPresent = history.some(
-    (message) => message.role === 'system' && message.content === TOOL_SYSTEM_PROMPT
+    (message) => message.role === 'system' && message.content === SFU_TOOL_SYSTEM_PROMPT
   );
   if (alreadyPresent) {
     return history;
   }
-  return [{ role: 'system', content: TOOL_SYSTEM_PROMPT }, ...history];
+  return [{ role: 'system', content: SFU_TOOL_SYSTEM_PROMPT }, ...history];
 };
 
 export const streamProviderChat = async (

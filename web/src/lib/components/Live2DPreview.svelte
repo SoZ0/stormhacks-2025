@@ -23,7 +23,7 @@
 	import type { BaseTexture, Texture as PixiTexture } from '@pixi/core';
 	import { Ticker, TickerPlugin } from '@pixi/ticker';
 	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
-	import type { Live2DMotionOption } from '$lib/live2d/types';
+	import { DEFAULT_IDLE_AUTOPLAY_DELAY_MS, type Live2DMotionOption } from '$lib/live2d/types';
 	import { getLocalModelBundle } from '$lib/live2d/client';
 	import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
 	import { mouthOpen } from '$lib/live2d/mouth';
@@ -255,6 +255,8 @@ export let loading = false;
 	let mouthParamErrorLogged = false;
 let mouthFormErrorLogged = false;
 
+	let idleAutoplayDelayMs: number = DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
+	let idleTimer: number | null = null;
 	let layoutRetryHandle: number | null = null;
 	let layoutRetryCancel: ((id: number) => void) | null = null;
 
