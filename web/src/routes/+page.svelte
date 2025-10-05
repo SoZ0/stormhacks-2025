@@ -72,14 +72,14 @@
     const demoModels: ModelOption[] = [
         {
             label: 'Hiyori',
-            modelPath: '/models/hiyori/hiyori_free_t08.model3.json',
+            modelPath: '/models/hiyori/runtime/hiyori_pro_t11.model3.json',
             scaleMultiplier: 1,
             anchor: { x: 0.5, y: 0.4 },
             position: { x: 0.5, y: 0.4 }
         },
         {
             label: 'Miku',
-            modelPath: '/models/miku/runtime/miku.model3.json',
+            modelPath: '/models/miku/runtime/miku_sample_t04.model3.json',
             scaleMultiplier: 0.85,
             anchor: { x: 0.5, y: 0.2 },
             position: { x: 0.5, y: 0.3 }
