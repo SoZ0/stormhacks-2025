@@ -1,6 +1,7 @@
 import Tar from 'tar-js';
 import { gzipSync, unzipSync } from 'fflate';
-import { createModel, type KaldiRecognizer, type Model } from 'vosk-browser';
+import { Model as VoskModel, type KaldiRecognizer } from 'vosk-browser';
+import type { Model as VoskModelInstance } from 'vosk-browser';
 
 const DEFAULT_MODEL_URL = import.meta.env.VITE_VOSK_MODEL_PATH ??
   '/models/vosk-model-small-en-us-0.15.zip';
@@ -48,6 +49,8 @@ type ControllerOptions = {
 
 const DEFAULT_SAMPLE_RATE = 16000;
 const DEFAULT_BUFFER_SIZE = 4096;
+
+type Model = VoskModelInstance;
 
 let cachedModelPromise: Promise<Model> | null = null;
 let cachedModelSource: string | null = null;
@@ -117,6 +120,79 @@ const prepareModelUrl = async (modelUrl: string): Promise<string> => {
   return cachedPreparedModelUrl;
 };
 
+const waitForModelReady = async (modelUrl: string, logLevel: number): Promise<Model> => {
+  const model = new VoskModel(modelUrl, logLevel);
+
+  return new Promise<Model>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = (shouldTerminate: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      model.removeEventListener('load', handleLoad as EventListener);
+      model.removeEventListener('error', handleError as EventListener);
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (shouldTerminate) {
+        try {
+          model.terminate();
+        } catch {
+          // Ignore termination errors.
+        }
+      }
+    };
+
+    const resolveWithModel = () => {
+      cleanup(false);
+      resolve(model);
+    };
+
+    const rejectWithError = (error: OfflineSpeechError) => {
+      cleanup(true);
+      reject(error);
+    };
+
+    const deriveErrorMessage = (detail: { error?: string } | undefined): string => {
+      const message = detail?.error ?? 'The offline speech worker reported an unknown error.';
+      return message;
+    };
+
+    const handleLoad = (event: Event) => {
+      const detail = (event as CustomEvent<{ result?: boolean; error?: string }>).detail;
+      if (detail?.result) {
+        resolveWithModel();
+        return;
+      }
+      const message = deriveErrorMessage(detail);
+      rejectWithError(new OfflineSpeechError(
+        'model-unavailable',
+        `Offline speech model failed to load: ${message}`
+      ));
+    };
+
+    const handleError = (event: Event) => {
+      const detail = (event as CustomEvent<{ error?: string }>).detail;
+      const message = deriveErrorMessage(detail);
+      rejectWithError(new OfflineSpeechError('model-unavailable', message));
+    };
+
+    timeoutId = setTimeout(() => {
+      rejectWithError(new OfflineSpeechError(
+        'model-unavailable',
+        'Timed out while preparing the offline speech model. Check the model archive and try again.'
+      ));
+    }, 30000);
+
+    model.addEventListener('load', handleLoad as EventListener);
+    model.addEventListener('error', handleError as EventListener);
+  });
+};
+
 const loadModel = async (modelUrl: string, logLevel: number): Promise<Model> => {
   if (!isOfflineSpeechSupported()) {
     throw new OfflineSpeechError(
@@ -134,7 +210,7 @@ const loadModel = async (modelUrl: string, logLevel: number): Promise<Model> => 
     });
 
     cachedModelPromise = cachedPreparedModelPromise
-      .then((resolvedUrl) => createModel(resolvedUrl, logLevel))
+      .then((resolvedUrl) => waitForModelReady(resolvedUrl, logLevel))
       .catch((error: unknown) => {
         resetModelCache();
         if (error instanceof OfflineSpeechError) {
@@ -313,22 +389,71 @@ export class OfflineSpeechController {
     this.running = false;
 
     if (this.recognizer) {
+      const recognizer = this.recognizer;
       const [partialHandler, resultHandler] = this.recognizerMessageHandlers;
+
+      let finalResultPromise: Promise<void> | null = null;
+      let resolveFinalResult: (() => void) | undefined;
+      let finalResultTimeoutId: ReturnType<typeof setTimeout> | null = null;
+      let finalResultWatcher: EventListener | null = null;
+
+      // Wait for the final recognition event to propagate before tearing down the recognizer.
+      if (resultHandler) {
+        finalResultPromise = new Promise<void>((resolve) => {
+          resolveFinalResult = resolve;
+          const onceHandler: EventListener = () => {
+            if (finalResultTimeoutId !== null) {
+              clearTimeout(finalResultTimeoutId);
+              finalResultTimeoutId = null;
+            }
+            resolve();
+          };
+
+          finalResultWatcher = onceHandler;
+          recognizer.addEventListener('result', onceHandler, { once: true });
+          finalResultTimeoutId = setTimeout(() => {
+            recognizer.removeEventListener('result', onceHandler);
+            resolve();
+          }, 750);
+        });
+      }
+
+      try {
+        recognizer.retrieveFinalResult();
+      } catch {
+        resolveFinalResult?.();
+      }
+
+      if (finalResultPromise) {
+        try {
+          await finalResultPromise;
+        } catch {
+          // Ignore errors while waiting for the final recognition result.
+        }
+      }
+
+      if (finalResultTimeoutId !== null) {
+        clearTimeout(finalResultTimeoutId);
+      }
+      if (finalResultWatcher) {
+        recognizer.removeEventListener('result', finalResultWatcher);
+      }
       if (partialHandler) {
-        this.recognizer.removeEventListener('partialresult', partialHandler);
+        recognizer.removeEventListener('partialresult', partialHandler);
       }
       if (resultHandler) {
-        this.recognizer.removeEventListener('result', resultHandler);
+        recognizer.removeEventListener('result', resultHandler);
       }
+
       this.partialHandler = null;
       this.resultHandler = null;
 
       try {
-        this.recognizer.retrieveFinalResult();
+        recognizer.remove();
       } catch {
-        // Swallow errors when retrieving the final result during cleanup.
+        // Ignore errors during recognizer shutdown.
       }
-      this.recognizer.remove();
+
       this.recognizer = null;
     }
 

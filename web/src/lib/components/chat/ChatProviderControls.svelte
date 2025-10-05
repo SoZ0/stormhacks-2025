@@ -53,13 +53,20 @@ export let options: LLMGenerationOptions = { ...defaultGenerationOptions };
 export let showPromptSettings = true;
 export let sfuToolsEnabled: boolean | null = null;
 export let sfuToolsChecking = false;
+export let imageSupportEnabled: boolean | null = null;
 	let toolSupportTooltip = '';
+	let imageSupportTooltip = '';
 
 	$: toolSupportTooltip = sfuToolsChecking
 		? 'Checking if the selected model supports tool calling…'
 		: sfuToolsEnabled
 			? 'Selected model supports tool calling.'
 			: 'Selected model does not support tool calling.';
+	$: imageSupportTooltip = imageSupportEnabled === null
+		? 'Select a model to check image support.'
+		: imageSupportEnabled
+			? 'Selected model accepts image attachments.'
+			: 'Selected model does not support images.';
 
 	const dispatch = createEventDispatcher<{
 		providerChange: ProviderId;
@@ -164,6 +171,19 @@ export let sfuToolsChecking = false;
 				</div>
 			{/if}
 		{/if}
+	{#if imageSupportEnabled !== null}
+		<div
+			title={imageSupportTooltip}
+			class={`inline-flex items-center gap-2 self-start rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${imageSupportEnabled
+				? 'border-sky-400/70 bg-sky-500/10 text-sky-200'
+				: 'border-surface-700/60 bg-surface-900/60 text-surface-200'}`}
+		>
+			<span
+				class={`h-2 w-2 rounded-full ${imageSupportEnabled ? 'bg-sky-400 shadow-sky-400/60' : 'bg-surface-500 shadow-surface-500/60'}`}
+			></span>
+			<span>{imageSupportEnabled ? 'Images Enabled' : 'Images Disabled'}</span>
+		</div>
+	{/if}
 	</div>
 
 	{#if showPromptSettings}

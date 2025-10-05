@@ -8,9 +8,19 @@ import {
 
 export type LlmSender = 'user' | 'bot';
 
+export interface ChatAttachmentPayload {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+}
+
 export interface ChatMessagePayload {
   sender: LlmSender;
   text: string;
+  timestamp: string;
+  attachments?: ChatAttachmentPayload[];
 }
 
 export type ChatStreamEventType = 'delta' | 'done' | 'error';
@@ -160,12 +170,14 @@ export const streamChatMessage = async (
   messages: ChatMessagePayload[],
   options: LLMGenerationOptions,
   onEvent: (event: ChatStreamEvent) => void,
-  toolsEnabled = true
+  toolsEnabled = true,
+  signal?: AbortSignal
 ): Promise<void> => {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model, systemPrompt, messages, options, toolsEnabled })
+    body: JSON.stringify({ provider, model, systemPrompt, messages, options, toolsEnabled }),
+    signal
   });
 
   if (!response.ok) {

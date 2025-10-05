@@ -1,13 +1,188 @@
 import { json } from '@sveltejs/kit';
+import { randomUUID } from 'crypto';
 import type { RequestHandler } from './$types';
 import { findProvider } from '$lib/server/providerStore';
-import { streamProviderChat, type ProviderMessage } from '$lib/server/llm';
+import { streamProviderChat, type ProviderAttachment, type ProviderMessage } from '$lib/server/llm';
 import { normalizeGenerationOptions } from '$lib/llm/settings';
+
+interface ClientAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl: string;
+}
 
 interface ClientMessage {
   sender: 'user' | 'bot';
   text: string;
+  timestamp?: string;
+  attachments?: ClientAttachment[];
 }
+
+const MAX_ATTACHMENTS_PER_MESSAGE = 6;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const DATA_URL_PATTERN = /^data:([^;\s]+);base64,([A-Za-z0-9+/=\s]+)$/;
+
+const sanitizeBase64 = (value: string): string => value.replace(/\s+/g, '');
+
+const toClientAttachment = (value: unknown): ClientAttachment | null => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const source = value as {
+    id?: unknown;
+    name?: unknown;
+    mimeType?: unknown;
+    size?: unknown;
+    dataUrl?: unknown;
+  };
+
+  const dataUrl = typeof source.dataUrl === 'string' ? source.dataUrl.trim() : '';
+  const mimeType = typeof source.mimeType === 'string' ? source.mimeType.trim() : '';
+
+  if (!dataUrl || !mimeType) {
+    return null;
+  }
+
+  const id = typeof source.id === 'string' && source.id.trim() ? source.id.trim() : randomUUID();
+  const name = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : 'attachment';
+  const sizeValue =
+    typeof source.size === 'number'
+      ? source.size
+      : typeof source.size === 'string'
+        ? Number.parseInt(source.size, 10)
+        : 0;
+  const size = Number.isFinite(sizeValue) && sizeValue > 0 ? Math.floor(sizeValue) : 0;
+
+  return {
+    id,
+    name,
+    mimeType,
+    size,
+    dataUrl
+  };
+};
+
+const coerceClientAttachments = (value: unknown): ClientAttachment[] | null => {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  if (value.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    return null;
+  }
+
+  const attachments: ClientAttachment[] = [];
+
+  for (const entry of value) {
+    const attachment = toClientAttachment(entry);
+    if (!attachment) {
+      return null;
+    }
+    attachments.push(attachment);
+  }
+
+  return attachments;
+};
+
+interface ParsedAttachment {
+  mimeType: string;
+  data: string;
+  size: number;
+}
+
+const parseAttachmentDataUrl = (attachment: ClientAttachment): ParsedAttachment | null => {
+  const match = DATA_URL_PATTERN.exec(attachment.dataUrl);
+  if (!match) {
+    return null;
+  }
+
+  const [, mime, base64Raw] = match;
+  const normalizedMime = attachment.mimeType || mime?.trim() || '';
+  if (!normalizedMime) {
+    return null;
+  }
+
+  const base64 = sanitizeBase64(base64Raw ?? '');
+  if (!base64) {
+    return null;
+  }
+
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) {
+      return null;
+    }
+
+    if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
+      return null;
+    }
+
+    return {
+      mimeType: normalizedMime,
+      data: base64,
+      size: buffer.byteLength
+    };
+  } catch {
+    return null;
+  }
+};
+
+const toProviderAttachments = (attachments: ClientAttachment[]): ProviderAttachment[] | null => {
+  if (!attachments.length) {
+    return [];
+  }
+
+  const normalized: ProviderAttachment[] = [];
+
+  for (const attachment of attachments) {
+    const parsed = parseAttachmentDataUrl(attachment);
+    if (!parsed) {
+      return null;
+    }
+
+    normalized.push({
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: parsed.mimeType,
+      size: parsed.size,
+      data: parsed.data
+    });
+  }
+
+  return normalized;
+};
+
+class InvalidAttachmentError extends Error {}
+
+const normalizeClientTimestamp = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) {
+      const parsed = new Date(trimmed);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+      return trimmed;
+    }
+    return null;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return null;
+};
 
 interface ChatRequestBody {
   provider: string;
@@ -23,7 +198,7 @@ const toClientMessage = (value: unknown): ClientMessage | null => {
     return null;
   }
 
-  const source = value as { sender?: unknown; text?: unknown };
+  const source = value as { sender?: unknown; text?: unknown; timestamp?: unknown; attachments?: unknown };
   const senderRaw = typeof source.sender === 'string' ? source.sender.trim().toLowerCase() : '';
   const sender: ClientMessage['sender'] | null = senderRaw === 'user'
     ? 'user'
@@ -37,8 +212,15 @@ const toClientMessage = (value: unknown): ClientMessage | null => {
 
   const textValue = source.text;
   const text = typeof textValue === 'string' ? textValue : String(textValue ?? '');
+  const timestamp = normalizeClientTimestamp(source.timestamp);
+  const attachments = coerceClientAttachments((source as { attachments?: unknown }).attachments);
 
-  return { sender, text };
+  if (attachments === null) {
+    return null;
+  }
+
+  const base = timestamp ? { sender, text, timestamp } : { sender, text };
+  return attachments.length ? { ...base, attachments } : base;
 };
 
 const coerceClientMessages = (value: unknown): ClientMessage[] | null => {
@@ -70,6 +252,20 @@ const coerceClientMessages = (value: unknown): ClientMessage[] | null => {
   return null;
 };
 
+const formatHistoryTimestamp = (timestamp: string | undefined): string | null => {
+  if (!timestamp) {
+    return null;
+  }
+
+  const parsed = new Date(timestamp);
+  if (!Number.isNaN(parsed.getTime())) {
+    // Display in ISO format so the LLM receives an unambiguous timestamp.
+    return parsed.toISOString();
+  }
+
+  return timestamp.trim() ? timestamp : null;
+};
+
 const normalizeHistory = (messages: ClientMessage[], systemPrompt?: string): ProviderMessage[] => {
   const history: ProviderMessage[] = [];
 
@@ -78,10 +274,26 @@ const normalizeHistory = (messages: ClientMessage[], systemPrompt?: string): Pro
   }
 
   for (const message of messages) {
-    history.push({
+    const timestamp = formatHistoryTimestamp(message.timestamp);
+    const prefix = timestamp ? `[${timestamp}] ` : '';
+    const content = `${prefix}${message.text}`;
+    const entry: ProviderMessage = {
       role: message.sender === 'user' ? 'user' : 'assistant',
-      content: message.text
-    });
+      content
+    };
+
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    if (attachments.length) {
+      const normalizedAttachments = toProviderAttachments(attachments);
+      if (!normalizedAttachments) {
+        throw new InvalidAttachmentError('Attachment payload is invalid or exceeds the allowed size.');
+      }
+      if (normalizedAttachments.length) {
+        entry.attachments = normalizedAttachments;
+      }
+    }
+
+    history.push(entry);
   }
 
   return history;
@@ -116,10 +328,19 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
     return json({ error: 'Unsupported provider' }, { status: 404 });
   }
 
-  const history = normalizeHistory(
-    normalizedMessages,
-    typeof systemPrompt === 'string' ? systemPrompt : undefined
-  );
+  let history: ProviderMessage[];
+  try {
+    history = normalizeHistory(
+      normalizedMessages,
+      typeof systemPrompt === 'string' ? systemPrompt : undefined
+    );
+  } catch (error) {
+    if (error instanceof InvalidAttachmentError) {
+      return json({ error: error.message }, { status: 400 });
+    }
+
+    throw error;
+  }
   const generationOptions = normalizeGenerationOptions(options);
 
   try {

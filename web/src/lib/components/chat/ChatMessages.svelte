@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatMessagePayload } from '$lib/llm/client';
+  import type { ChatAttachmentPayload, ChatMessagePayload } from '$lib/llm/client';
   import type { ThinkingMode } from '$lib/chat/types';
   import { markdownToHtml } from '$lib/utils/markdown';
   import { afterUpdate, createEventDispatcher, onMount, tick } from 'svelte';
@@ -70,6 +70,44 @@
     return stripThinkingTags(raw);
   };
 
+  const isImageAttachment = (attachment: ChatAttachmentPayload) =>
+    typeof attachment?.mimeType === 'string' && attachment.mimeType.startsWith('image/');
+
+  const partitionAttachments = (attachments: ChatAttachmentPayload[] | undefined) => {
+    const images: ChatAttachmentPayload[] = [];
+    const files: ChatAttachmentPayload[] = [];
+
+    if (!attachments?.length) {
+      return { images, files };
+    }
+
+    for (const attachment of attachments) {
+      if (!attachment) continue;
+      if (isImageAttachment(attachment)) {
+        images.push(attachment);
+      } else {
+        files.push(attachment);
+      }
+    }
+
+    return { images, files };
+  };
+
+  const formatFileSize = (size: number): string => {
+    if (!Number.isFinite(size) || size <= 0) {
+      return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let value = size;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+      value /= 1024;
+      index += 1;
+    }
+    const fractionDigits = value >= 10 || index === 0 ? 0 : 1;
+    return `${value.toFixed(fractionDigits)} ${units[index]}`;
+  };
+
   const computeThinkingBlocks = (message: ChatDisplayMessage): string[] => {
     if (Array.isArray(message.thinkingBlocks) && message.thinkingBlocks.length) {
       return message.thinkingBlocks;
@@ -96,17 +134,22 @@
     renderedHtml: string;
     thinkingBlocks: string[];
     openStates: boolean[];
+    imageAttachments: ChatAttachmentPayload[];
+    fileAttachments: ChatAttachmentPayload[];
   }
 
   $: renderedMessages = messages.map<RenderedMessage>((message) => {
     const content = visibleText(message);
     const thinkingBlocks = computeThinkingBlocks(message);
+    const { images, files } = partitionAttachments(message.attachments);
     return {
       message,
       visibleContent: content,
       renderedHtml: content ? markdownToHtml(content) : '',
       thinkingBlocks,
-      openStates: computeOpenStates(message, thinkingBlocks)
+      openStates: computeOpenStates(message, thinkingBlocks),
+      imageAttachments: images,
+      fileAttachments: files
     };
   });
 
@@ -193,7 +236,7 @@
 </script>
 
 <div
-  class="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4"
+  class="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto p-3 sm:gap-4 sm:p-4"
   bind:this={container}
   on:scroll={handleScroll}
 >
@@ -221,6 +264,38 @@
 					</details>
 				{/each}
 			{/if}
+			{#if item.imageAttachments.length || item.fileAttachments.length}
+				<div class="flex flex-col gap-3">
+					{#if item.imageAttachments.length}
+						<div class={`grid gap-2 ${item.imageAttachments.length > 1 ? 'sm:grid-cols-2' : ''}`}>
+							{#each item.imageAttachments as attachment (attachment.id)}
+								<figure class="overflow-hidden rounded-xl border border-surface-800/60 bg-surface-900/40">
+									<img src={attachment.dataUrl} alt={`Attachment ${attachment.name}`} class="h-full w-full max-h-64 object-cover" loading="lazy" />
+									<figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-[11px] uppercase tracking-wide text-surface-400">
+										<span class="truncate">{attachment.name}</span>
+										<span>{formatFileSize(attachment.size)}</span>
+									</figcaption>
+								</figure>
+							{/each}
+						</div>
+					{/if}
+					{#if item.fileAttachments.length}
+						<div class="flex flex-col gap-2">
+							{#each item.fileAttachments as attachment (attachment.id)}
+								<a
+									href={attachment.dataUrl}
+									download={attachment.name}
+									class="flex items-center justify-between gap-3 rounded-xl border border-surface-800/60 bg-surface-900/60 px-3 py-2 text-xs text-surface-200 transition hover:border-primary-500/60 hover:text-primary-100"
+								>
+									<span class="truncate">{attachment.name}</span>
+									<span class="shrink-0 text-[11px] text-surface-400">{formatFileSize(attachment.size)}</span>
+								</a>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+
 			{#if item.visibleContent}
 				<div class="prose prose-invert prose-p:my-1 prose-pre:bg-surface-800/70 prose-pre:text-[13px] prose-pre:leading-relaxed prose-pre:p-3 prose-pre:rounded-lg max-w-none text-sm leading-relaxed">
 					{@html item.renderedHtml}

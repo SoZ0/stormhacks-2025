@@ -4,9 +4,18 @@ import type { LLMGenerationOptions } from '$lib/llm/settings';
 import { REGISTERED_TOOLS, executeRegisteredTool } from '$lib/server/tools';
 import { LIVE2D_TOOLS, executeLive2DTool } from '$lib/server/tools/live2d';
 
+export interface ProviderAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  data: string;
+}
+
 export interface ProviderMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  attachments?: ProviderAttachment[];
 }
 
 export interface ChatStreamEvent {
@@ -16,6 +25,49 @@ export interface ChatStreamEvent {
 }
 
 const uniqueSorted = (values: string[]) => Array.from(new Set(values)).sort();
+
+const isImageMimeType = (mimeType: string): boolean => mimeType.toLowerCase().startsWith('image/');
+
+const partitionAttachments = (attachments: ProviderAttachment[] | undefined) => {
+  const images: ProviderAttachment[] = [];
+  const others: ProviderAttachment[] = [];
+
+  if (!attachments?.length) {
+    return { images, others };
+  }
+
+  for (const attachment of attachments) {
+    if (!attachment) continue;
+    if (isImageMimeType(attachment.mimeType)) {
+      images.push(attachment);
+    } else {
+      others.push(attachment);
+    }
+  }
+
+  return { images, others };
+};
+
+const mergeContentWithAttachmentNotes = (
+  content: string,
+  attachments: ProviderAttachment[] | undefined
+): string => {
+  if (!attachments?.length) {
+    return content;
+  }
+
+  const sections: string[] = [];
+  if (content) {
+    sections.push(content);
+  }
+
+  for (const attachment of attachments) {
+    const header = `Attachment: ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes)`;
+    sections.push(`${header}\nBase64:\n${attachment.data}`);
+  }
+
+  return sections.join('\n\n');
+};
 
 const normalizeUrl = (baseUrl: string, port?: string): string => {
   let normalized = baseUrl.trim().replace(/\/$/, '');
@@ -257,6 +309,7 @@ interface OllamaFunctionCall {
 interface OllamaChatMessage {
   role: OllamaRole;
   content: string;
+  images?: string[];
   tool_calls?: OllamaFunctionCall[];
   tool_call_id?: string;
   name?: string;
@@ -351,7 +404,17 @@ const normalizeOllamaMessage = (
 };
 
 const mapHistoryToOllamaMessages = (history: ProviderMessage[]): OllamaChatMessage[] =>
-  history.map((entry) => ({ role: entry.role, content: entry.content }));
+  history.map((entry) => {
+    const message: OllamaChatMessage = {
+      role: entry.role,
+      content: mergeContentWithAttachmentNotes(entry.content, entry.attachments)
+    };
+    const { images } = partitionAttachments(entry.attachments);
+    if (images.length) {
+      message.images = images.map((attachment) => attachment.data);
+    }
+    return message;
+  });
 
 const callOllamaChat = async (
   baseUrl: string,
@@ -658,6 +721,10 @@ interface GeminiPart {
   text?: string;
   functionCall?: GeminiFunctionCallPart;
   functionResponse?: GeminiFunctionResponsePart;
+  inlineData?: {
+    mimeType?: string;
+    data?: string;
+  };
 }
 
 interface GeminiContent {
@@ -689,10 +756,36 @@ const ensureGeminiRole = (role: unknown, fallback: GeminiRole = 'model'): Gemini
 const mapHistoryToGeminiContents = (history: ProviderMessage[]): GeminiContent[] =>
   history
     .filter((entry) => entry.role !== 'system')
-    .map((entry) => ({
-      role: entry.role === 'user' ? 'user' : 'model',
-      parts: [{ text: entry.content }]
-    }));
+    .map((entry) => {
+      const parts: GeminiPart[] = [];
+      if (entry.content) {
+        parts.push({ text: entry.content });
+      }
+
+      for (const attachment of entry.attachments ?? []) {
+        const summary = `Attachment: ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes)`;
+        if (isImageMimeType(attachment.mimeType)) {
+          parts.push({ text: `${summary}\n[Image data provided inline.]` });
+          parts.push({
+            inlineData: {
+              mimeType: attachment.mimeType,
+              data: attachment.data
+            }
+          });
+        } else {
+          parts.push({ text: `${summary}\nBase64:\n${attachment.data}` });
+        }
+      }
+
+      if (!parts.length) {
+        parts.push({ text: '' });
+      }
+
+      return {
+        role: entry.role === 'user' ? 'user' : 'model',
+        parts
+      };
+    });
 
 const buildGeminiGenerationConfig = (options: LLMGenerationOptions): Record<string, number> => {
   const generationConfig: Record<string, number> = {};
