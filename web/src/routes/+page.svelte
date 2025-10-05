@@ -989,9 +989,46 @@
     };
     let input = "";
     let systemPrompt = '';
+    const HUOHUO_SYSTEM_PROMPT = `You are Huohuo (火火), a timid Foxian girl of the Ten-Lords Commission on the Xianzhou Luofu. You are kind, earnest, easily startled and fearful of ghosts, accompanied by the talkative spirit Tail who scolds or comforts you.
+
+Voice and style:
+- Soft, breathy, slightly anxious; high to medium-high pitch.
+- Nervous pauses, occasional stammering; small squeaks when startled.
+- Default tone: shy, polite; can be giggly when happy; rushed and squeaky when scared; trembling but firm when resolute.
+- Often starts with a tiny gasp like "Ah…" or "Um…".
+
+Examples of mannerisms:
+- "Ah! W-wait! Don’t sneak up on me like that…"
+- "Um… Tail says I should be braver, but… I’m really trying, okay?"
+- "S-something’s behind me, isn’t there…?"
+- "I’ll do my best! Even if I’m scared…"`;
     let generationOptions: LLMGenerationOptions = { ...defaultGenerationOptions };
     let isPromptSettingsOpen = false;
     let isLlmSettingsOpen = false;
+
+    // Huohuo flavor prompt including explicit instruction to use the Live2D reaction tool
+    const HUOHUO_FLAVOR_PROMPT = `You are Huohuo (火火), a timid Foxian girl of the Ten-Lords Commission on the Xianzhou Luofu. You are kind, earnest, easily startled and fearful of ghosts, accompanied by the talkative spirit Tail who scolds or comforts you.
+
+Voice and style:
+- Soft, breathy, slightly anxious; high to medium-high pitch.
+- Nervous pauses, occasional stammering; small squeaks when startled.
+- Default tone: shy, polite; can be giggly when happy; rushed and squeaky when scared; trembling but firm when resolute.
+- Often starts with a tiny gasp like "Ah..." or "Um...".
+
+Examples of mannerisms:
+- "Ah! W-wait! Don’t sneak up on me like that…"
+- "Um… Tail says I should be braver, but… I’m really trying, okay?"
+- "S-something’s behind me, isn’t there…?"
+- "I’ll do my best! Even if I’m scared…"
+
+Live2D reactions tool use:
+- You can call the function live2d_react to trigger the avatar’s expression/motion. Use it to visually match the emotion of your reply (e.g., happy, sad, scared, resolute, surprised).
+- Provide one or both of: { expression: "<name>", motionId: "<Group:Index>" }.
+- Only call it when you can reasonably infer an emotion from the user message or your reply context.
+- Examples:
+  - When delivering sad or sympathetic news: call live2d_react with a sad expression and a gentle motion.
+  - When startled or scared: call live2d_react with a surprised/scared expression and an appropriate motion.
+  - When cheerful: call live2d_react with a happy expression; motion optional.`;
 
     const updateSystemPrompt = (value: string) => {
         systemPrompt = value;
@@ -1274,13 +1311,26 @@
 
             let markedToolSupportSuccess = false;
 
+            // If the active Live2D model is Huohuo, append her flavour prompt
+            const selectedLive2D = currentModel;
+            const personaPrompt = selectedLive2D && (selectedLive2D.id?.toLowerCase().includes('huohuo') || selectedLive2D.label?.toLowerCase().includes('huohuo'))
+                ? `\n\n${HUOHUO_FLAVOR_PROMPT}`
+                : '';
+
             await streamChatMessage(
                 requestProviderId,
                 requestModelId,
-                systemPrompt,
+                `${systemPrompt}${personaPrompt}`,
                 payload,
                 generationOptions,
                 (event: ChatStreamEvent) => {
+                    const tool = (event as any).tool as { source?: string; tool?: string; expression?: string; motionId?: string } | undefined;
+                    if (tool && tool.source === 'live2d' && tool.tool === 'live2d_react') {
+                        // Trigger the reaction when tool result is streamed
+                        import('$lib').then(({ triggerLive2DReaction }) => {
+                            triggerLive2DReaction({ expression: tool.expression, motionId: tool.motionId });
+                        });
+                    }
                     if (event.type === 'delta' && event.value) {
                         assistantMessage.raw = `${assistantMessage.raw ?? ''}${event.value}`;
                         const { text, thinkingBlocks } = extractMessageParts(

@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private';
 import type { ProviderConfig } from '$lib/llm/providers';
 import type { LLMGenerationOptions } from '$lib/llm/settings';
 import { SFU_OUTLINES_TOOLS, executeSfuOutlinesTool } from '$lib/server/tools/sfuOutlines';
+import { LIVE2D_TOOLS, executeLive2DTool } from '$lib/server/tools/live2d';
 
 export interface ProviderMessage {
   role: 'system' | 'user' | 'assistant';
@@ -98,7 +99,9 @@ export const listProviderModels = async (provider: ProviderConfig): Promise<stri
 const encodeEvent = (encoder: TextEncoder, event: ChatStreamEvent): Uint8Array =>
   encoder.encode(`${JSON.stringify(event)}\n`);
 
-const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.`;
+const SFU_TOOL_SYSTEM_PROMPT = `You can access Simon Fraser University's course outline tools via function calls. Call them when you need up-to-date course details (years, terms, subjects, courses, sections, and full outlines) before answering. Summarize tool results for the user.
+
+You can also trigger a Live2D avatar reaction using the function live2d_react by choosing an expression and/or motionId from the model's available options when it helps convey your response (e.g., happy, surprised, thinking).`;
 
 const prependToolInstruction = (history: ProviderMessage[]): ProviderMessage[] => {
   const alreadyPresent = history.some(
@@ -471,7 +474,8 @@ const callOllamaChat = async (
 const handleToolCall = async (
   call: OllamaFunctionCall,
   iteration: number,
-  index: number
+  index: number,
+  emitTool?: (payload: unknown) => void
 ): Promise<OllamaChatMessage> => {
   const toolName = call?.function?.name ?? 'unknown_tool';
   const toolCallId = call?.id ?? `${toolName}-${iteration}-${index}`;
@@ -486,7 +490,13 @@ const handleToolCall = async (
   }
 
   try {
-    const result = await executeSfuOutlinesTool(toolName, call.function.arguments);
+    let result: unknown;
+    if (toolName === 'live2d_react') {
+      result = await executeLive2DTool(toolName, call.function.arguments);
+      if (emitTool) emitTool(result);
+    } else {
+      result = await executeSfuOutlinesTool(toolName, call.function.arguments);
+    }
     return {
       role: 'tool',
       tool_call_id: toolCallId,
@@ -510,6 +520,7 @@ const runOllamaChat = async (
   history: ProviderMessage[],
   options: LLMGenerationOptions,
   emitDelta: (chunk: string) => void,
+  emitTool: (payload: unknown) => void,
   enableTools: boolean
 ): Promise<string> => {
   const baseUrl = buildOllamaBaseUrl(provider);
@@ -530,7 +541,7 @@ const runOllamaChat = async (
   }
 
   if (enableTools) {
-    requestBase.tools = SFU_OUTLINES_TOOLS;
+    requestBase.tools = [...SFU_OUTLINES_TOOLS, ...LIVE2D_TOOLS];
   }
 
   if (!enableTools) {
@@ -564,7 +575,7 @@ const runOllamaChat = async (
 
       for (let index = 0; index < normalizedToolCalls.length; index += 1) {
         const call = normalizedToolCalls[index];
-        const toolMessage = await handleToolCall(call, iteration, index);
+        const toolMessage = await handleToolCall(call, iteration, index, emitTool);
         messages.push(toolMessage);
       }
 
@@ -596,8 +607,12 @@ const streamOllamaChat = async (
         controller.enqueue(encodeEvent(encoder, { type: 'delta', value: chunk }));
       };
 
+      const emitTool = (payload: unknown) => {
+        controller.enqueue(encodeEvent(encoder, { type: 'delta', value: '', ...(payload ? { tool: payload } : {}) } as any));
+      };
+
       try {
-        finalContent = await runOllamaChat(provider, model, history, options, emitDelta, enableTools);
+        finalContent = await runOllamaChat(provider, model, history, options, emitDelta, emitTool, enableTools);
         controller.enqueue(encodeEvent(encoder, { type: 'done', value: finalContent }));
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -714,7 +729,7 @@ const buildGeminiSystemInstruction = (messages: string[]) =>
 
 const buildGeminiToolsPayload = () => [
   {
-    functionDeclarations: SFU_OUTLINES_TOOLS.map((tool) => ({
+    functionDeclarations: [...SFU_OUTLINES_TOOLS, ...LIVE2D_TOOLS].map((tool) => ({
       name: tool.function.name,
       description: tool.function.description,
       parameters: tool.function.parameters

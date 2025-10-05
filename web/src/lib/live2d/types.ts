@@ -9,7 +9,6 @@ export interface Live2DModelConfig {
   position?: Live2DVectorConfig;
   scaleMultiplier?: number;
   targetHeightRatio?: number;
-  idleAutoplayDelayMs?: number;
   voiceId?: string | null;
 }
 
@@ -55,7 +54,6 @@ export const DEFAULT_ANCHOR: Live2DVectorConfig = { x: 0.5, y: 0.5 };
 export const DEFAULT_POSITION: Live2DVectorConfig = { x: 0.5, y: 0.95 };
 export const DEFAULT_SCALE_MULTIPLIER = 1;
 export const DEFAULT_TARGET_HEIGHT_RATIO = 0.9;
-export const DEFAULT_IDLE_AUTOPLAY_DELAY_MS = 5000;
 
 
 

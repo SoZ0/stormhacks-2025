@@ -106,7 +106,6 @@
     positionY: string;
     scaleMultiplier: string;
     targetHeightRatio: string;
-    idleAutoplayDelayMs: string;
   }
 
   const stringify = (value: number | undefined, fallback: number) => {
@@ -124,8 +123,7 @@
     positionX: defaultPositionX.toString(),
     positionY: defaultPositionY.toString(),
     scaleMultiplier: DEFAULT_SCALE_MULTIPLIER.toString(),
-    targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO.toString(),
-    idleAutoplayDelayMs: '5000'
+    targetHeightRatio: DEFAULT_TARGET_HEIGHT_RATIO.toString()
   });
 
   const formFromModel = (model: ModelOption): EditFormState => ({
@@ -138,8 +136,7 @@
     positionX: stringify(model.position?.x, defaultPositionX),
     positionY: stringify(model.position?.y, defaultPositionY),
     scaleMultiplier: stringify(model.scaleMultiplier, DEFAULT_SCALE_MULTIPLIER),
-    targetHeightRatio: stringify(model.targetHeightRatio, DEFAULT_TARGET_HEIGHT_RATIO),
-    idleAutoplayDelayMs: stringify(model.idleAutoplayDelayMs, 5000)
+    targetHeightRatio: stringify(model.targetHeightRatio, DEFAULT_TARGET_HEIGHT_RATIO)
   });
 
   export let open = false;
@@ -432,8 +429,6 @@
       0.1,
       2
     );
-    const delayValue = clamp(toNumber(editForm.idleAutoplayDelayMs) ?? 5000, 500, 600000);
-
     const absolutePath = modelPath ?? editingModel.modelPath ?? editingModel.availableModelFiles?.[0];
     const previewModelPath = absolutePath?.trim() || undefined;
     const manualCubismPath = editForm.cubismCorePath.trim();
@@ -449,8 +444,7 @@
       anchor: { x: anchorX, y: anchorY },
       position: { x: positionX, y: positionY },
       scaleMultiplier: scaleMultiplierValue,
-      targetHeightRatio: targetHeightRatioValue,
-      idleAutoplayDelayMs: delayValue
+      targetHeightRatio: targetHeightRatioValue
     };
 
     previewConfig = {
@@ -460,7 +454,6 @@
       position: { x: positionX, y: positionY },
       scaleMultiplier: scaleMultiplierValue,
       targetHeightRatio: targetHeightRatioValue,
-      idleAutoplayDelayMs: delayValue,
       storage: editingModel.storage,
       localModelId: editingModel.storage === 'local' ? editingModel.id : null
     };
@@ -865,18 +858,7 @@
                   </label>
                 </div>
 
-                <div class="grid gap-3 md:grid-cols-2">
-                  <label class="flex flex-col gap-2 text-sm text-surface-200">
-                    <span class="text-xs font-semibold uppercase tracking-[0.2em] text-surface-400">Idle autoplay delay (ms)</span>
-                    <input
-                      type="number"
-                      min="500"
-                      step="100"
-                      class="rounded-xl border border-surface-700/60 bg-surface-900/70 px-3 py-2 text-sm text-surface-100 focus:border-primary-500 focus:outline-none"
-                      bind:value={editForm.idleAutoplayDelayMs}
-                    />
-                  </label>
-                </div>
+                <!-- Idle autoplay removed: animations will be triggered by LLM tool calls -->
 
                 {#if editError}
                   <p class="rounded-2xl border border-error-500/40 bg-error-500/15 px-4 py-3 text-xs text-error-100">

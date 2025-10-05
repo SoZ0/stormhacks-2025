@@ -8,7 +8,6 @@
         position?: { x?: number; y?: number };
         scaleMultiplier?: number;
         targetHeightRatio?: number;
-        idleAutoplayDelayMs?: number;
         storage?: Live2DModelStorage;
         localModelId?: string | null;
     };
@@ -25,10 +24,10 @@
 	import { Ticker, TickerPlugin } from '@pixi/ticker';
 	import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
 	import type { Live2DMotionOption } from '$lib/live2d/types';
-	import { DEFAULT_IDLE_AUTOPLAY_DELAY_MS } from '$lib/live2d/types';
 	import { getLocalModelBundle } from '$lib/live2d/client';
 	import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
 	import { mouthOpen } from '$lib/live2d/mouth';
+    import { live2dReaction } from '$lib/live2d/bus';
 
 	let patchedPixiUrlResolve = false;
 	const ensurePixiUrlResolvePatched = async () => {
@@ -175,7 +174,6 @@
 			});
 		}
 
-		scheduleIdle();
 		return true;
 	}
 
@@ -255,10 +253,9 @@ export let loading = false;
 	let mouthParamAvailable = false;
 	let mouthFormAvailable = false;
 	let mouthParamErrorLogged = false;
-	let mouthFormErrorLogged = false;
+let mouthFormErrorLogged = false;
 
-	let idleAutoplayDelayMs: number = DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
-	let idleTimer: number | null = null;
+// idle timer removed
 
 	const unsubscribeMouth = browser
 		? mouthOpen.subscribe((value) => {
@@ -319,7 +316,7 @@ export let loading = false;
 	$: positionY = config?.position?.y ?? DEFAULT_POSITION.y;
 	$: targetHeightRatio = config?.targetHeightRatio ?? DEFAULT_TARGET_HEIGHT_RATIO;
 	$: scaleMultiplier = config?.scaleMultiplier ?? DEFAULT_SCALE_MULTIPLIER;
-    $: idleAutoplayDelayMs = (config?.idleAutoplayDelayMs ?? DEFAULT_IDLE_AUTOPLAY_DELAY_MS);
+    // idle autoplay removed; config no longer controls any delay
 
 	const ensureCubismCore = async (src: string) => {
 		if (typeof window === 'undefined') return;
@@ -628,29 +625,8 @@ export let loading = false;
 
 	let loadToken = 0;
 
-	const clearIdleTimer = () => {
-		if (idleTimer != null) {
-			clearTimeout(idleTimer);
-			idleTimer = null;
-		}
-	};
-
-	const scheduleIdle = () => {
-		clearIdleTimer();
-		const delay = Number.isFinite(idleAutoplayDelayMs) ? Math.max(0, idleAutoplayDelayMs) : DEFAULT_IDLE_AUTOPLAY_DELAY_MS;
-		idleTimer = window.setTimeout(() => {
-			const anyModel: any = model as any;
-			try {
-				const settings = anyModel?.internalModel?._settings || anyModel?.internalModel?.settings;
-				const motionsDef = settings?.FileReferences?.Motions;
-				if (motionsDef?.Idle?.length && typeof anyModel.motion === 'function') {
-					anyModel.motion('Idle', 0).catch(console.warn);
-				}
-			} catch (e) {
-				console.warn('Live2DPreview: scheduled idle failed', e);
-			}
-		}, delay);
-	};
+	// Removed idle timer logic in favour of explicit, tool-triggered animations
+	const clearIdleTimer = () => {};
 	let inFlightModelConfig: ModelConfig | null = null;
 	let loadedModelConfig: ModelConfig | null = null;
 
@@ -713,20 +689,7 @@ export let loading = false;
 					}
 				}
 			} catch (e) { console.warn('Live2DPreview: failed to build motions list', e); }
-			// Auto-play Idle motion once and schedule next
-			try {
-				const anyModel: any = model as any;
-				const settings = anyModel?.internalModel?._settings || anyModel?.internalModel?.settings;
-				const motionsDef = settings?.FileReferences?.Motions;
-				if (motionsDef && motionsDef.Idle && motionsDef.Idle.length && typeof anyModel.motion === 'function') {
-					anyModel.motion('Idle', 0).catch(console.warn);
-					scheduleIdle();
-				} else {
-					clearIdleTimer();
-				}
-			} catch (e) {
-				console.warn('Live2DPreview: auto motion start failed', e);
-			}
+			// Idle autoplay removed – animations are driven externally when prompts send
 
 			loadedModelConfig = { modelUrl, coreSrc };
 		} catch (error) {
@@ -741,6 +704,19 @@ export let loading = false;
 			}
 		}
 	};
+
+	// Public API: react to a prompt with optional expression and motion
+	export function react(options: { expression?: string; motionId?: string } = {}): boolean {
+		const { expression, motionId } = options;
+		let ok = true;
+		if (expression) {
+			try { setExpression(expression); } catch { ok = false; }
+		}
+		if (motionId) {
+			ok = playMotion(motionId) && ok;
+		}
+		return ok;
+	}
 
 	$: {
 		if (model && !inFlightModelConfig) {
@@ -770,6 +746,11 @@ export let loading = false;
 		componentDestroyed = false;
 		void initializeApp();
 
+		const unsubscribeReaction = live2dReaction.subscribe((evt) => {
+			if (!evt) return;
+			try { react({ expression: evt.expression, motionId: evt.motionId }); } catch {}
+		});
+
 		return () => {
 			componentDestroyed = true;
 			restartScheduled = false;
@@ -789,6 +770,7 @@ export let loading = false;
 			loadedModelConfig = null;
 			loading = false;
 			cleanupLocalBundle();
+			unsubscribeReaction();
 		};
 	});
 
