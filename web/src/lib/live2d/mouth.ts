@@ -57,6 +57,7 @@ const createAudioTracker = (audio: HTMLMediaElement) => {
   silentGain.gain.value = 0;
   analyser.connect(silentGain);
   silentGain.connect(context.destination);
+  source.connect(context.destination);
 
   const data = new Uint8Array(analyser.fftSize);
   let raf = 0;

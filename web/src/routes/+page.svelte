@@ -1320,7 +1320,8 @@
 
     type AudioSource =
         | { kind: 'buffer'; buffer: ArrayBuffer; mimeType: string }
-        | { kind: 'dataUrl'; dataUrl: string; mimeType?: string };
+        | { kind: 'dataUrl'; dataUrl: string; mimeType?: string }
+        | { kind: 'blob'; blob: Blob };
 
     let activeAudio: HTMLAudioElement | null = null;
     let activeAudioCleanup: (() => void) | null = null;
@@ -1349,7 +1350,7 @@
         activeAudioMessageId = null;
     };
 
-    const arrayBufferToDataUrl = (buffer: ArrayBuffer, mimeType: string): string => {
+    const encodeArrayBufferToDataUrl = (buffer: ArrayBuffer, mimeType: string): string => {
         if (typeof btoa !== 'function') {
             throw new Error('Base64 encoding is not supported in this environment');
         }
@@ -1364,6 +1365,42 @@
 
         const base64 = btoa(binary);
         return `data:${mimeType};base64,${base64}`;
+    };
+
+    const blobToDataUrl = async (blob: Blob, fallbackMime: string): Promise<string> => {
+        if (typeof FileReader === 'undefined') {
+            const buffer = await blob.arrayBuffer();
+            return encodeArrayBufferToDataUrl(buffer, blob.type || fallbackMime);
+        }
+
+        return new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => {
+                reject(reader.error ?? new Error('Failed to encode audio.'));
+            };
+            reader.onloadend = () => {
+                const result = reader.result;
+                if (typeof result === 'string') {
+                    resolve(result);
+                } else {
+                    reject(new Error('Unexpected FileReader result.'));
+                }
+            };
+            reader.readAsDataURL(blob);
+        });
+    };
+
+    const arrayBufferToDataUrl = async (buffer: ArrayBuffer, mimeType: string): Promise<{
+        dataUrl: string;
+        blob: Blob | null;
+    }> => {
+        if (typeof Blob === 'undefined') {
+            return { dataUrl: encodeArrayBufferToDataUrl(buffer, mimeType), blob: null };
+        }
+
+        const blob = new Blob([buffer], { type: mimeType });
+        const dataUrl = await blobToDataUrl(blob, mimeType);
+        return { dataUrl, blob };
     };
 
     const dataUrlToBuffer = (dataUrl: string): { mimeType: string; buffer: ArrayBuffer } => {
@@ -1392,6 +1429,38 @@
         return { mimeType, buffer: bytes.buffer };
     };
 
+    const waitForAudioReady = (audio: HTMLAudioElement): Promise<void> => {
+        return new Promise((resolve, reject) => {
+            let settled = false;
+
+            const cleanup = () => {
+                audio.removeEventListener('canplay', handleCanPlay);
+                audio.removeEventListener('canplaythrough', handleCanPlay);
+                audio.removeEventListener('error', handleError);
+            };
+
+            const handleCanPlay = () => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve();
+            };
+
+            const handleError = () => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                const mediaError = audio.error;
+                const message = mediaError?.message ?? `Audio decode failed (code ${mediaError?.code ?? 'unknown'})`;
+                reject(new Error(message));
+            };
+
+            audio.addEventListener('canplay', handleCanPlay, { once: true });
+            audio.addEventListener('canplaythrough', handleCanPlay, { once: true });
+            audio.addEventListener('error', handleError, { once: true });
+        });
+    };
+
     const updateMessageAudio = (messageId: string, payload: MessageAudioPayload | null) => {
         messages = messages.map((message) =>
             message.id === messageId ? { ...message, audio: payload ? { ...payload } : null } : message
@@ -1418,9 +1487,13 @@
         audio.preload = 'auto';
 
         let revokeUrl: (() => void) | null = null;
-        if (source.kind === 'buffer') {
-            const blob = new Blob([source.buffer], { type: source.mimeType });
-            const playbackUrl = URL.createObjectURL(blob);
+        if (source.kind === 'blob') {
+            const playbackUrl = URL.createObjectURL(source.blob);
+            revokeUrl = () => URL.revokeObjectURL(playbackUrl);
+            audio.src = playbackUrl;
+        } else if (source.kind === 'buffer') {
+            const playbackBlob = new Blob([source.buffer], { type: source.mimeType });
+            const playbackUrl = URL.createObjectURL(playbackBlob);
             revokeUrl = () => URL.revokeObjectURL(playbackUrl);
             audio.src = playbackUrl;
         } else {
@@ -1438,6 +1511,7 @@
                 revokeUrl();
                 revokeUrl = null;
             }
+            audio.removeEventListener('error', handleDecodeError);
             if (notification && !notified) {
                 notified = true;
                 notifyApiError(notification.title, notification.description);
@@ -1449,7 +1523,6 @@
         };
 
         audio.addEventListener('ended', () => finalize(), { once: true });
-        audio.addEventListener('error', handleDecodeError, { once: true });
 
         activeAudio = audio;
         activeAudioMessageId = messageId;
@@ -1459,6 +1532,23 @@
                 revokeUrl = null;
             }
         };
+
+        try {
+            audio.load();
+            await waitForAudioReady(audio);
+        } catch (prepareError) {
+            finalize({
+                title: 'Playback failed',
+                description:
+                    prepareError instanceof Error
+                        ? prepareError.message
+                        : 'Unable to decode generated audio.'
+            });
+            console.error('Audio preparation failed', prepareError);
+            return;
+        }
+
+        audio.addEventListener('error', handleDecodeError, { once: true });
 
         try {
             await trackMouthFromAudio(audio);
@@ -1493,7 +1583,12 @@
 
         try {
             const { buffer, mimeType } = dataUrlToBuffer(target.audio.dataUrl);
-            await playAudioSource({ kind: 'buffer', buffer, mimeType }, target.id);
+            if (typeof Blob !== 'undefined') {
+                const blob = new Blob([buffer], { type: mimeType });
+                await playAudioSource({ kind: 'blob', blob }, target.id);
+            } else {
+                await playAudioSource({ kind: 'buffer', buffer, mimeType }, target.id);
+            }
         } catch (convertError) {
             console.error('Failed to decode audio for playback', convertError);
             notifyApiError('Playback failed', 'Unable to decode saved audio.');
@@ -1538,9 +1633,9 @@
             const headerType = res.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase();
             const mimeType = headerType && headerType.startsWith('audio/') ? headerType : 'audio/mpeg';
 
-            let dataUrl: string;
+            let audioData: { dataUrl: string; blob: Blob | null };
             try {
-                dataUrl = arrayBufferToDataUrl(arrayBuffer, mimeType);
+                audioData = await arrayBufferToDataUrl(arrayBuffer, mimeType);
             } catch (encodeError) {
                 console.error('Failed to encode audio for storage', encodeError);
                 notifyApiError('Text-to-speech failed', 'Unable to cache generated audio.');
@@ -1548,7 +1643,7 @@
             }
 
             const audioPayload: MessageAudioPayload = {
-                dataUrl,
+                dataUrl: audioData.dataUrl,
                 mimeType,
                 voiceId,
                 createdAt: Date.now(),
@@ -1556,7 +1651,11 @@
             };
             updateMessageAudio(message.id, audioPayload);
 
-            await playAudioSource({ kind: 'buffer', buffer: arrayBuffer, mimeType }, message.id);
+            if (audioData.blob) {
+                await playAudioSource({ kind: 'blob', blob: audioData.blob }, message.id);
+            } else {
+                await playAudioSource({ kind: 'buffer', buffer: arrayBuffer, mimeType }, message.id);
+            }
         } catch (e) {
             const messageError = e instanceof Error ? e.message : 'Unable to generate speech';
             notifyApiError('Text-to-speech failed', messageError);
