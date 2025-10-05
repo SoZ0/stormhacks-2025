@@ -28,6 +28,7 @@ export interface Live2DModelRecord extends Live2DModelSettings {
   isCustom: boolean;
   editable: boolean;
   removable: boolean;
+  storage: 'builtin' | 'remote';
 }
 
 interface StoredLive2DModel extends Live2DModelSettings {
@@ -78,7 +79,8 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     updatedAt: 0,
     isCustom: false,
     editable: false,
-    removable: false
+    removable: false,
+    storage: 'builtin'
   },
   {
     id: 'builtin-miku',
@@ -95,7 +97,8 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     updatedAt: 0,
     isCustom: false,
     editable: false,
-    removable: false
+    removable: false,
+    storage: 'builtin'
   },
   {
     id: 'builtin-huohuo',
@@ -112,7 +115,8 @@ const BUILTIN_MODELS: Live2DModelRecord[] = [
     updatedAt: 0,
     isCustom: false,
     editable: false,
-    removable: false
+    removable: false,
+    storage: 'builtin'
   }
 ];
 
@@ -269,7 +273,8 @@ const mapStoredToRecord = (stored: StoredLive2DModel): Live2DModelRecord => {
     updatedAt: stored.updatedAt,
     isCustom: true,
     editable: true,
-    removable: true
+    removable: true,
+    storage: 'remote'
   };
 };
 

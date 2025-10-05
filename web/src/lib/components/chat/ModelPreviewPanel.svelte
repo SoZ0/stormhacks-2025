@@ -27,7 +27,8 @@
 		updatedAt: 0,
 		isCustom: false,
 		editable: false,
-		removable: false
+		removable: false,
+		storage: 'builtin'
 	};
 
 	export let state: ModelPreviewState = { models: [], index: 0, current: null };
@@ -74,7 +75,9 @@
 		scaleMultiplier: activeModel.scaleMultiplier,
 		targetHeightRatio: activeModel.targetHeightRatio,
 		anchor: activeModel.anchor,
-		position: activeModel.position
+		position: activeModel.position,
+		storage: activeModel.storage,
+		localModelId: activeModel.storage === 'local' ? activeModel.id : null
 	};
 </script>
 

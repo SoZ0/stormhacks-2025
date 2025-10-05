@@ -35,6 +35,8 @@
 	"dependencies": {
 		"adm-zip": "^0.5.16",
 		"@elevenlabs/elevenlabs-js": "^2.17.0",
+		"fflate": "^0.8.2",
+		"idb": "^7.1.1",
 		"live2dcubismcore": "^1.0.2",
 		"pixi-live2d-display": "^0.4.0",
 		"pixi.js": "6.5.10",

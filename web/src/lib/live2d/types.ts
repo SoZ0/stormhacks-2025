@@ -12,6 +12,8 @@ export interface Live2DModelConfig {
   voiceId?: string | null;
 }
 
+export type Live2DModelStorage = 'builtin' | 'remote' | 'local';
+
 export interface Live2DModelDefinition extends Live2DModelConfig {
   id: string;
   label: string;
@@ -22,6 +24,7 @@ export interface Live2DModelDefinition extends Live2DModelConfig {
   isCustom: boolean;
   editable: boolean;
   removable: boolean;
+  storage: Live2DModelStorage;
 }
 
 export interface Live2DModelListResponse {

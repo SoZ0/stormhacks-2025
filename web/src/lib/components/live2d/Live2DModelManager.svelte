@@ -17,7 +17,11 @@
   import { listElevenLabsVoices, type ElevenLabsVoiceOption } from '$lib/tts/client';
 
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-  const toNumber = (value: string) => {
+  const toNumber = (value: string | number | null | undefined) => {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : undefined;
+    }
+    if (value == null) return undefined;
     const trimmed = value.trim();
     if (!trimmed) return undefined;
     const parsed = Number(trimmed);
@@ -36,12 +40,17 @@
   const ensureLeadingSlash = (value: string) =>
     value.startsWith('/') || isExternalPath(value) ? value : `/${value}`;
   const getCustomSlug = (model: ModelOption | null | undefined) =>
-    model?.id?.startsWith('custom-') ? model.id.slice('custom-'.length) : null;
+    model?.storage === 'remote' && model?.id?.startsWith('custom-')
+      ? model.id.slice('custom-'.length)
+      : null;
 
   const toRelativeModelPath = (model: ModelOption | null | undefined, rawPath: string | null | undefined) => {
     if (!model || !rawPath) return '';
     const trimmed = rawPath.trim();
     if (!trimmed || isExternalPath(trimmed)) return trimmed;
+    if (model.storage === 'local') {
+      return stripLeadingSlashes(normalizeSlashes(trimmed));
+    }
     const normalized = stripLeadingSlashes(normalizeSlashes(trimmed));
     const slug = getCustomSlug(model);
     if (!slug) return normalized;
@@ -62,6 +71,10 @@
       return model.modelPath ?? model.availableModelFiles?.[0];
     }
     if (isExternalPath(trimmed)) return trimmed;
+
+    if (model.storage === 'local') {
+      return stripLeadingSlashes(normalizeSlashes(trimmed));
+    }
 
     const slug = getCustomSlug(model);
     const normalized = stripLeadingSlashes(normalizeSlashes(trimmed));
@@ -378,7 +391,12 @@
     }
   };
 
-  const resolvedNumber = (value: string, fallback: number, min?: number, max?: number) => {
+  const resolvedNumber = (
+    value: string | number | null | undefined,
+    fallback: number,
+    min?: number,
+    max?: number
+  ) => {
     const parsed = toNumber(value);
     let result = Number.isFinite(parsed ?? NaN) ? (parsed as number) : fallback;
     if (typeof min === 'number' && typeof max === 'number') {
@@ -412,12 +430,15 @@
     );
 
     const absolutePath = modelPath ?? editingModel.modelPath ?? editingModel.availableModelFiles?.[0];
-    const cubismCore = editForm.cubismCorePath.trim() || editingModel.cubismCorePath;
+    const previewModelPath = absolutePath?.trim() || undefined;
+    const manualCubismPath = editForm.cubismCorePath.trim();
+    const modelCubismPath = editingModel.cubismCorePath?.trim();
+    const cubismCore = manualCubismPath || modelCubismPath || undefined;
     const trimmedVoiceId = editForm.voiceId?.trim() ?? '';
     const nextDraft: ModelOption = {
       ...editingModel,
       label: editForm.label.trim() || editingModel.label,
-      modelPath: absolutePath ?? editingModel.modelPath,
+      modelPath: previewModelPath ?? editingModel.modelPath,
       cubismCorePath: cubismCore,
       voiceId: trimmedVoiceId.length > 0 ? trimmedVoiceId : null,
       anchor: { x: anchorX, y: anchorY },
@@ -427,12 +448,14 @@
     };
 
     previewConfig = {
-      modelPath: modelPath ?? undefined,
-      cubismCorePath: editForm.cubismCorePath.trim() || editingModel.cubismCorePath,
+      modelPath: previewModelPath,
+      cubismCorePath: cubismCore,
       anchor: { x: anchorX, y: anchorY },
       position: { x: positionX, y: positionY },
       scaleMultiplier: scaleMultiplierValue,
-      targetHeightRatio: targetHeightRatioValue
+      targetHeightRatio: targetHeightRatioValue,
+      storage: editingModel.storage,
+      localModelId: editingModel.storage === 'local' ? editingModel.id : null
     };
 
     emitDraftChange(nextDraft);
@@ -498,7 +521,7 @@
       on:click={closeModal}
       aria-label="Dismiss Live2D model manager"
     ></button>
-    <div class="relative z-10 mx-auto w-full max-w-6xl">
+    <div class="relative z-10 mx-auto w-full max-w-7xl">
       <div class="flex h-full flex-col rounded-3xl border border-surface-800/50 bg-surface-950/95 shadow-2xl shadow-surface-950/40">
         <header class="flex items-start justify-between gap-4 border-b border-surface-800/60 px-6 py-5">
           <div class="flex flex-col gap-1">
@@ -515,7 +538,7 @@
             ✕
           </button>
         </header>
-        <div class="grid gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <div class="grid gap-6 px-6 py-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
           <section class="flex flex-col gap-5">
             <div class="rounded-2xl border border-surface-800/50 bg-surface-950/70 p-5">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

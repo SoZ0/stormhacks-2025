@@ -1,4 +1,6 @@
 <script lang="ts" context="module">
+    import type { Live2DModelStorage } from '$lib/live2d/types';
+
     export type Live2DPreviewConfig = {
         modelPath?: string | null;
         cubismCorePath?: string;
@@ -6,15 +8,20 @@
         position?: { x?: number; y?: number };
         scaleMultiplier?: number;
         targetHeightRatio?: number;
+        storage?: Live2DModelStorage;
+        localModelId?: string | null;
     };
 </script>
 
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { browser } from '$app/environment';
     import { base } from '$app/paths';
     import { Application, type IApplicationOptions } from 'pixi.js';
     import { Ticker } from '@pixi/ticker';
     import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4';
+    import { getLocalModelBundle } from '$lib/live2d/client';
+    import type { LocalModelAssetBundle } from '$lib/live2d/local-store';
 
 	interface Live2DWindow extends Window {
 		Live2DCubismCore?: unknown;
@@ -96,10 +103,53 @@ export let loading = false;
 	let resolvedModelUrl = staticPathFor(DEFAULT_MODEL_PATH);
 	let resolvedCubismCoreSrc = staticPathFor(DEFAULT_CUBISM_CORE_PATH);
 
-	$: resolvedModelUrl = staticPathFor(config?.modelPath ?? DEFAULT_MODEL_PATH);
+	let localBundle: LocalModelAssetBundle | null = null;
+	let sourceToken = 0;
+	let lastLocalKey = '';
+
+	const cleanupLocalBundle = () => {
+		localBundle?.dispose();
+		localBundle = null;
+		lastLocalKey = '';
+	};
+
 	$: resolvedCubismCoreSrc = staticPathFor(
 		config?.cubismCorePath ?? DEFAULT_CUBISM_CORE_PATH
 	);
+
+	$: void (async () => {
+		const storage = config?.storage;
+		const desiredPath = config?.modelPath ?? DEFAULT_MODEL_PATH;
+
+		if (storage === 'local') {
+			if (!browser || !config?.localModelId) return;
+			const bundleKey = `${config.localModelId}::${desiredPath ?? ''}`;
+			if (localBundle && bundleKey === lastLocalKey) {
+				return;
+			}
+			const token = ++sourceToken;
+			try {
+				const bundle = await getLocalModelBundle(config.localModelId, desiredPath ?? undefined);
+				if (token !== sourceToken) {
+					bundle.dispose();
+					return;
+				}
+				cleanupLocalBundle();
+				localBundle = bundle;
+				lastLocalKey = bundleKey;
+				resolvedModelUrl = bundle.modelUrl;
+			} catch (error) {
+				if (token === sourceToken) {
+					console.error('Live2DPreview: failed to prepare local model bundle', error);
+				}
+			}
+			return;
+		}
+
+		cleanupLocalBundle();
+		const resolved = staticPathFor(desiredPath ?? DEFAULT_MODEL_PATH);
+		resolvedModelUrl = resolved;
+	})();
 	$: anchorX = config?.anchor?.x ?? DEFAULT_ANCHOR.x;
 	$: anchorY = config?.anchor?.y ?? DEFAULT_ANCHOR.y;
 	$: positionX = config?.position?.x ?? DEFAULT_POSITION.x;
@@ -351,6 +401,7 @@ export let loading = false;
 			inFlightModelConfig = null;
 			loadedModelConfig = null;
 			loading = false;
+			cleanupLocalBundle();
 		};
 	});
 </script>
