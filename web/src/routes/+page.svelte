@@ -463,6 +463,11 @@
                     assistantMessage.streaming = false;
                     assistantMessage.thinkingOpen = hasThinking ? false : undefined;
                     updateAssistant(() => ({ ...assistantMessage }));
+                    if (assistantMessage.text?.trim()) {
+                        speakText(assistantMessage.text);
+                    } else {
+                        console.warn('Skipping TTS: empty text');
+                    }
                 }
 
                 if (event.type === 'error') {
@@ -476,6 +481,29 @@
             isSending = false;
         }
     };
+
+    async function speakText(text: string) {
+  const VOICE = 'JBFqnCBsd6RMkjVDRZzb';
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voiceId: VOICE })
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      console.error('TTS error', res.status, payload);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.onended = () => URL.revokeObjectURL(url);
+    await audio.play();
+  } catch (e) {
+    console.error('speakText failed', e);
+  }
+    }
 
     onMount(() => {
         isPreviewDrawerOpen = false;
